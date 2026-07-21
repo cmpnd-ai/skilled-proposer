@@ -77,7 +77,7 @@ SkilledProposer(
     base_instructions=None,        # replace the built-in meta-prompt
     max_words=None,                # word cap on proposed instructions
     max_tokens=None,               # token cap on proposed instructions
-    prompt_model=None,             # LM for the standalone gepa package
+    prompt_model=None,             # (standalone GEPA only)
     max_examples=None,             # cap reflective examples per component
     on_error="keep",               # "keep" or "raise"
 )
