@@ -51,7 +51,22 @@ A skill is reference material for the reflection model. Each entry in `skills` c
 - an inline string
 - a `Skill(name=..., content=..., description=...)` object
 
-If the file starts with YAML frontmatter, `name` and `description` are read from it and the block is stripped from the content. This repo ships an example at [`skills/prompt-engineering`](skills/prompt-engineering), a prompt optimization guide the reflection model can apply when rewriting instructions. Only the `SKILL.md` file is read in v0.1. Files under `references/` are ignored.
+If the file starts with YAML frontmatter, `name` and `description` are read from it and the block is stripped from the content. This repo ships an example at [`skills/prompt-engineering`](skills/prompt-engineering), a prompt optimization guide the reflection model can apply when rewriting instructions.
+
+### Skills with subfolders
+
+Loading a skill directory reads only its `SKILL.md`. Files in subfolders such as `models/` or `references/` are not loaded. This is deliberate. An agent browsing a skill can open those files when it needs them, but GEPA calls the proposer in a plain LM call with no filesystem, many times per run. What the reflection model should see is also known before the run starts, e.g., you know which student model you are optimizing. So you, the developer, pick the extra files and pass them alongside the parent skill:
+
+```python
+proposer = SkilledProposer(
+    skills=[
+        "./skills/prompt-engineering",                    # reads SKILL.md
+        "./skills/prompt-engineering/models/openai.md",   # guidance for the student model
+    ],
+)
+```
+
+Each entry becomes its own `<skill>` block in the reflection prompt. Pass only the files that apply to your run. Inlining a whole skill folder would grow every proposal call for no benefit.
 
 ## Options
 
