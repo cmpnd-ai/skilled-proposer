@@ -27,7 +27,10 @@ import dspy
 from skilled_proposer import SkilledProposer
 
 proposer = SkilledProposer(
-    skills=["./skills/prompt-engineering"],
+    skills=[
+        "./skills/prompt-engineering",                   # reads SKILL.md
+        "./skills/prompt-engineering/models/openai.md",  # guidance for the student model
+    ],
     additional_instructions="Write instructions in imperative voice.",
     max_words=300,
 )
@@ -93,7 +96,10 @@ SkilledProposer(
 
 ```python
 proposer = SkilledProposer(
-    skills=["./skills/prompt-engineering"],
+    skills=[
+        "./skills/prompt-engineering",
+        "./skills/prompt-engineering/models/openai.md",
+    ],
     prompt_model=dspy.LM("openai/gpt-5", temperature=1.0, max_tokens=32000),
 )
 ```
