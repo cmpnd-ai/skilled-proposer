@@ -4,9 +4,9 @@ A custom instruction proposer for [GEPA](https://dspy.ai/api/optimizers/GEPA/), 
 
 ## Why
 
-GEPA improves a program by asking a reflection model to rewrite each component's instruction based on execution traces and evaluator feedback. The stock proposer tells the reflection model to include "niche and domain specific factual information" from those traces in the new instruction. That helps on benchmarks, but it copies entities, numbers, and answers from your training examples into the prompt, and the prompt then does worse on inputs it has never seen.
+GEPA improves a program by asking a reflection model to rewrite each component's instruction based on execution traces and evaluator feedback. The stock proposer tells the reflection model to include "niche and domain specific factual information" from those traces in the new instruction. This helps with some tasks, but it can copy entities, numbers, and answers from your training examples into the prompt, and the prompt might perform worse on inputs it has never seen.
 
-`SkilledProposer` uses a different meta-prompt. It treats the examples as evidence of weaknesses in the instruction, extracts strategies and decision rules that transfer, and forbids copying example-specific content. It also adds three practical controls:
+`SkilledProposer` uses a different meta-prompt. It gives the reflection model a three-step procedure. First, infer the task from the examples, because the assistant will only ever see the instruction. Second, diagnose why each failure happened and find the general rule that would have prevented it. Third, write the replacement instruction from those rules. The prompt then states one principle against overfitting. The proposer also adds three practical controls:
 
 - Skills. Pass SKILL.md files, skill directories, or inline strings. The reflection model gets them as reference material, e.g., a prompting guide for your student model.
 - Extra guidance. A plain string applied to every proposal.
