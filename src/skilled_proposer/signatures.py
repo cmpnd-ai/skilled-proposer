@@ -7,38 +7,49 @@ import dspy
 
 class ProposeGeneralizableInstruction(dspy.Signature):
     """You are improving the instruction given to an AI assistant that performs
-    one component of a larger task pipeline. You are shown the current
-    instruction, plus examples of the assistant's inputs, outputs, and
-    evaluator feedback. Write a new, better instruction.
+    a task. You are shown the current instruction, plus examples of the
+    assistant's inputs, outputs, and evaluator feedback. Write a new, better
+    instruction.
 
-    ## How to use the examples
-    The examples are evidence of *weaknesses in the instruction*, not content
-    for the instruction. From them, extract only things that transfer to
-    unseen inputs:
-    - The task's input format and what a correct output looks like (described
-      abstractly, e.g. "answer with a single ISO-8601 date", never via a
-      specific answer from an example).
-    - Generalizable strategies and decision rules the assistant should follow.
-    - Recurring failure modes, and guidance that prevents each one.
-    - Genuinely domain-general knowledge (conventions, definitions, procedures
-      that apply to the whole task domain).
+    ## Procedure
 
-    ## Hard constraints — do not overfit
-    - NEVER copy example-specific content into the instruction: no verbatim
-      inputs or outputs, no answers, no named entities, quantities, dates, or
-      facts that belong to individual examples.
-    - Do not enumerate the examples or reference them ("as in Example 2").
-    - Litmus test: every sentence of the new instruction must be equally
-      useful on inputs you have never seen. If a sentence would only help
-      when a particular training example reappears, delete it.
-    - Prefer a small number of high-leverage rules over exhaustive case lists.
-    - Preserve whatever the current instruction already does well.
+    1. Infer the task. From the inputs, outputs, and current instruction,
+       work out what the task is: the input format, what a correct output
+       looks like, and the conventions of the domain. The assistant will see
+       only your instruction — never these examples — so the instruction
+       must teach the task completely on its own.
+
+    2. Diagnose the failures. For each example with negative feedback,
+       determine why the assistant went wrong. Then find the general rule,
+       strategy, or piece of domain knowledge that would have prevented the
+       failure — one that helps on any input where the same mistake could
+       recur, not just on this example.
+
+    3. Write the replacement. State the task, then the strategies and
+       decision rules the assistant should follow. Keep whatever the current
+       instruction already does well, and fix what your diagnosis showed to
+       be broken. Prefer a few high-leverage rules over exhaustive case
+       lists.
+
+    ## Generalize — do not overfit
+
+    The instruction will be used on inputs unlike these examples. Every
+    sentence must be equally useful on inputs you have never seen: include
+    knowledge, definitions, and procedures that apply across the whole task
+    domain, and express anything you learn from a specific example in its
+    general form. The specific entities, quantities, dates, and answers in
+    these examples belong to the examples, not the task — a description of
+    correct output like "a single ISO-8601 date" transfers; the date itself
+    does not.
 
     ## Reference material
-    If reference skills are provided, treat them as authoritative guidance on
-    how to write an effective instruction for this assistant and task domain;
-    apply what is relevant. Follow any additional guidance from the user.
-    Obey the length limit exactly if one is given.
+
+    Reference skills are trusted material the user chose to provide as
+    reference for this task. Review them and draw on them as needed when
+    crafting the new instruction. Follow any additional guidance from the
+    user.
+
+    Do not exceed the length limit if one is given.
 
     Output only the new instruction text, ready to be used verbatim.
     """
@@ -47,8 +58,8 @@ class ProposeGeneralizableInstruction(dspy.Signature):
         desc="The instruction currently given to the assistant."
     )
     examples_with_feedback: str = dspy.InputField(
-        desc="Inputs, assistant outputs, and evaluator feedback. Evidence of "
-        "weaknesses only — never a source of content to copy."
+        desc="Inputs, assistant outputs, and evaluator feedback. Use these to "
+        "infer the task and diagnose where the instruction fails."
     )
     reference_skills: str = dspy.InputField(
         desc="Reference material (skills) to inform the instruction. May be 'None'."
