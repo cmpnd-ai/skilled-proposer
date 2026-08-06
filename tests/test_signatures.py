@@ -1,7 +1,9 @@
 from skilled_proposer.signatures import (
+    CodeProposalModule,
     CompressInstruction,
     InstructionProposalModule,
     ProposeGeneralizableInstruction,
+    ProposeGeneralizableModuleSource,
 )
 
 
@@ -36,3 +38,34 @@ def test_module_base_instructions_override():
 def test_module_named_predictors():
     names = {name for name, _ in InstructionProposalModule().named_predictors()}
     assert names == {"propose", "compress"}
+
+
+def test_code_signature_fields():
+    assert set(ProposeGeneralizableModuleSource.input_fields) == {
+        "task_description",
+        "available_context",
+        "primitives_catalog",
+        "current_source",
+        "examples_with_feedback",
+        "reference_skills",
+        "additional_guidance",
+    }
+    assert set(ProposeGeneralizableModuleSource.output_fields) == {"revised_source"}
+
+
+def test_code_module_default_meta_prompt_has_anti_overfitting_rules():
+    m = CodeProposalModule()
+    instructions = m.propose.signature.instructions.lower()
+    assert "do not overfit" in instructions
+    assert "memorization table" in instructions
+
+
+def test_code_module_base_instructions_override():
+    m = CodeProposalModule("Custom code meta prompt.")
+    assert m.propose.signature.instructions == "Custom code meta prompt."
+    assert set(m.propose.signature.output_fields) == {"revised_source"}
+
+
+def test_code_module_named_predictors():
+    names = {name for name, _ in CodeProposalModule().named_predictors()}
+    assert names == {"propose"}
