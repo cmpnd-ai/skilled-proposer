@@ -14,7 +14,7 @@ from typing import Any, Mapping, Sequence
 import dspy
 
 from skilled_proposer.signatures import InstructionProposalModule
-from skilled_proposer.skill import Skill
+from skilled_proposer.skill import Skill, render_skills
 
 logger = logging.getLogger(__name__)
 
@@ -128,15 +128,7 @@ class SkilledProposer:
         return self._enforce_length(new_text.strip())
 
     def _render_skills(self) -> str:
-        if not self.skills:
-            return "None"
-        parts = []
-        for skill in self.skills:
-            attrs = f"name={skill.name!r}"
-            if skill.description:
-                attrs += f" description={skill.description!r}"
-            parts.append(f"<skill {attrs}>\n{skill.content.strip()}\n</skill>")
-        return "\n\n".join(parts)
+        return render_skills(self.skills)
 
     # -- Length budget ------------------------------------------------------
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 
 @dataclass(frozen=True)
@@ -88,3 +89,16 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
                 meta[key.strip()] = value.strip().strip("'\"")
             return meta, "\n".join(lines[end + 1 :])
     return {}, text
+
+
+def render_skills(skills: Sequence[Skill]) -> str:
+    """Render skills as <skill> blocks for a reflection prompt, or 'None'."""
+    if not skills:
+        return "None"
+    parts = []
+    for skill in skills:
+        attrs = f"name={skill.name!r}"
+        if skill.description:
+            attrs += f" description={skill.description!r}"
+        parts.append(f"<skill {attrs}>\n{skill.content.strip()}\n</skill>")
+    return "\n\n".join(parts)
