@@ -106,6 +106,41 @@ proposer = SkilledProposer(
 
 Then pass `proposer` wherever gepa accepts a `ProposalFn`.
 
+## Flex code proposals
+
+dspy 3.3 added [`dspy.Flex`](https://dspy.ai/diving-deeper/flex/), a module that holds its whole implementation as Python source, which GEPA rewrites during optimization. GEPA sends Flex components to a built-in code proposer, and a custom `instruction_proposer` never sees them. The built-in prompt does not warn the reflection model against memorizing the training set, and with code the risk is worse than with instructions. The model can write a branch that matches one training input and returns its answer.
+
+`SkilledCodeProposer` applies this package's approach to Flex source. The reflection model gets the same three step procedure, a rule against overfitting written for code, your reference skills, and your extra guidance. Every proposal is checked before it is used. It must parse and contain a class definition, or the current source is kept.
+
+dspy has no `code_proposer` hook yet, so this package patches the built-in proposer for the duration of a `compile` call:
+
+```python
+import dspy
+from skilled_proposer import SkilledCodeProposer, SkilledProposer, use_code_proposer
+
+optimizer = dspy.GEPA(
+    metric=metric,
+    reflection_lm=dspy.LM("openai/gpt-5", temperature=1.0, max_tokens=32000),
+    instruction_proposer=SkilledProposer(skills=["./skills/prompt-engineering"]),
+    auto="medium",
+)
+
+code_proposer = SkilledCodeProposer(
+    skills=["./skills/prompt-engineering"],
+    additional_instructions="Prefer few predictors and plain Python.",
+)
+
+with use_code_proposer(code_proposer):
+    optimized = optimizer.compile(program, trainset=train, valset=val)
+```
+
+Notes:
+
+- This feature requires dspy 3.3 or newer. The rest of the package still works with dspy 3.0.
+- dspy logs a warning that a custom `instruction_proposer` skips code components. Under the patch the warning is expected and harmless, because the patched proposer handles them.
+- The patch is a bridge. We are proposing a `code_proposer` parameter for `dspy.GEPA`; once it lands, pass `SkilledCodeProposer` there and drop the patch.
+- `SkilledCodeProposer` takes `skills`, `additional_instructions`, `base_instructions`, `prompt_model`, `max_examples`, and `on_error`, with the same meanings as `SkilledProposer`. There is no length budget for code.
+
 ## Limits
 
 - v0.1 is text only. Rich values such as `dspy.Image` are stringified in the reflective examples, so the reflection model cannot see them. Multimodal support is planned for v0.2.
