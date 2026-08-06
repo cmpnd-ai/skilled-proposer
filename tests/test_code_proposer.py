@@ -46,6 +46,13 @@ def test_validate_rejects_source_without_class():
     assert "class" in error
 
 
+def test_validate_rejects_class_without_forward():
+    src = "class Old(dspy.Module):\n    def __init__(self):\n        super().__init__()\n"
+    error = _validate_module_source(src)
+    assert error is not None
+    assert "forward" in error
+
+
 def test_primitives_catalog_available():
     pytest.importorskip("dspy.predict.flex")
     catalog = _primitives_catalog()
@@ -105,6 +112,35 @@ def test_invalid_source_raises_when_asked():
     lm = DummyLM([{"revised_source": "not python at all ((("}])
     with pytest.raises(ValueError, match="parse"):
         _call(SkilledCodeProposer(prompt_model=lm, on_error="raise"))
+
+
+def test_source_without_forward_kept_by_default():
+    pytest.importorskip("dspy.predict.flex")
+    no_forward = "class Old(dspy.Module):\n    def __init__(self):\n        super().__init__()\n"
+    lm = DummyLM([{"revised_source": no_forward}])
+    out = _call(SkilledCodeProposer(prompt_model=lm), source="class Old: pass")
+    assert out["flex_step"] == "class Old: pass"
+
+
+def test_source_without_forward_raises_when_asked():
+    pytest.importorskip("dspy.predict.flex")
+    no_forward = "class Old(dspy.Module):\n    def __init__(self):\n        super().__init__()\n"
+    lm = DummyLM([{"revised_source": no_forward}])
+    with pytest.raises(ValueError, match="forward"):
+        _call(SkilledCodeProposer(prompt_model=lm, on_error="raise"))
+
+
+def test_on_error_keep_still_raises_lm_error():
+    from dspy.utils.exceptions import LMError
+
+    proposer = SkilledCodeProposer()
+
+    def boom(**kwargs):
+        raise LMError("provider down")
+
+    proposer.module = boom
+    with pytest.raises(LMError):
+        _call(proposer)
 
 
 def test_prompt_inputs_passed_through():

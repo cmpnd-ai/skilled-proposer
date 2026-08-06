@@ -87,7 +87,7 @@ SkilledProposer(
 ```
 
 - `base_instructions` replaces the whole meta-prompt, including the anti-overfitting rules. If you still want those rules, include equivalent text in your replacement.
-- `on_error="keep"` logs a failed proposal and keeps the current instruction, so a long GEPA run survives a flaky call. Use `on_error="raise"` during development so failures surface.
+- `on_error="keep"` logs a failed proposal and keeps the current instruction, so a long GEPA run survives a flaky call. Use `on_error="raise"` during development so failures surface. Either way, LM/provider errors (`LMError`) always propagate, so a dead API key fails the run instead of silently keeping unchanged text for the whole run.
 - `max_tokens` counts tokens with litellm's tokenizer when it can resolve your model name, and falls back to about 4 characters per token.
 
 ## Using the standalone gepa package

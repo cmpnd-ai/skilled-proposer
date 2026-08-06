@@ -18,6 +18,12 @@ from pathlib import Path
 
 import dspy
 
+try:
+    from dspy.utils.exceptions import LMError
+except ImportError:  # dspy < 3.x fallback: nothing raises it
+    class LMError(Exception):
+        pass
+
 from skilled_proposer.proposer import _render_examples
 from skilled_proposer.signatures import CodeProposalModule
 from skilled_proposer.skill import Skill, render_skills
@@ -39,8 +45,17 @@ def _validate_module_source(source: str) -> str | None:
         tree = ast.parse(source)
     except SyntaxError as e:
         return f"proposed source does not parse: {e}"
-    if not any(isinstance(node, ast.ClassDef) for node in ast.walk(tree)):
+    class_defs = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    if not class_defs:
         return "proposed source defines no class"
+    has_forward = any(
+        isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and member.name == "forward"
+        for class_def in class_defs
+        for member in ast.walk(class_def)
+    )
+    if not has_forward:
+        return "proposed source defines no class with a forward method"
     return None
 
 
@@ -81,7 +96,8 @@ class SkilledCodeProposer:
         max_examples: Cap on reflective examples rendered per component.
             None = no cap.
         on_error: "keep" (default) logs a failed or invalid proposal and
-            keeps the current source; "raise" propagates.
+            keeps the current source; "raise" propagates. Either way, an
+            LM/provider error (LMError) always propagates.
     """
 
     def __init__(
@@ -130,6 +146,8 @@ class SkilledCodeProposer:
                     task_descriptions.get(name, name),
                     context_blurbs.get(name, "(no extra context)"),
                 )
+            except LMError:
+                raise
             except Exception:
                 if self.on_error == "raise":
                     raise

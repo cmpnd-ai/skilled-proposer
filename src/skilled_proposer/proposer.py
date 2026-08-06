@@ -13,6 +13,12 @@ from typing import Any, Mapping, Sequence
 
 import dspy
 
+try:
+    from dspy.utils.exceptions import LMError
+except ImportError:  # dspy < 3.x fallback: nothing raises it
+    class LMError(Exception):
+        pass
+
 from skilled_proposer.signatures import InstructionProposalModule
 from skilled_proposer.skill import Skill, render_skills
 
@@ -49,7 +55,8 @@ class SkilledProposer:
             "keep" (default) logs the error and keeps the current
             instruction, so long GEPA runs survive flaky proposals.
             "raise" propagates the error, so failures surface during
-            development.
+            development. Either way, an LM/provider error (LMError)
+            always propagates.
     """
 
     def __init__(
@@ -98,6 +105,8 @@ class SkilledProposer:
                 examples = examples[: self.max_examples]
             try:
                 results[name] = self._propose_one(current, examples)
+            except LMError:
+                raise
             except Exception:
                 if self.on_error == "raise":
                     raise

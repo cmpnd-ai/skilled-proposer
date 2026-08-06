@@ -1,5 +1,6 @@
 import pytest
 from dspy.utils.dummies import DummyLM
+from dspy.utils.exceptions import LMError
 
 from skilled_proposer.proposer import SkilledProposer, _render_examples
 from skilled_proposer.skill import Skill
@@ -48,6 +49,21 @@ def test_on_error_raise_propagates():
 
     proposer.module = boom
     with pytest.raises(RuntimeError, match="boom"):
+        proposer(
+            candidate={"a": "old a"},
+            reflective_dataset={"a": []},
+            components_to_update=["a"],
+        )
+
+
+def test_on_error_keep_still_raises_lm_error():
+    proposer = SkilledProposer()
+
+    def boom(**kwargs):
+        raise LMError("provider down")
+
+    proposer.module = boom
+    with pytest.raises(LMError):
         proposer(
             candidate={"a": "old a"},
             reflective_dataset={"a": []},

@@ -10,6 +10,12 @@ CodeProposalFn contract. Remove once dspy.GEPA accepts a
 Note: dspy still logs a warning that a custom instruction_proposer
 "skips code components" — under this patch that warning is expected and
 harmless, since the patched proposer handles them.
+
+This patch is process-global state: it replaces a module-level function
+for as long as it is installed, affecting every GEPA compile running in
+the process, so it is meant to be installed once around a single
+``compile`` call (e.g. via ``use_code_proposer``), not left installed
+across concurrent compiles.
 """
 
 from __future__ import annotations
@@ -77,12 +83,18 @@ def install_code_proposer(proposer) -> None:
         if reflection_lm is not None:
             with dspy.context(lm=reflection_lm):
                 return proposer(
-                    candidate, reflective_dataset, list(code_keys),
-                    task_descriptions, context_blurbs,
+                    candidate=candidate,
+                    reflective_dataset=reflective_dataset,
+                    components_to_update=list(code_keys),
+                    task_descriptions=task_descriptions,
+                    context_blurbs=context_blurbs,
                 )
         return proposer(
-            candidate, reflective_dataset, list(code_keys),
-            task_descriptions, context_blurbs,
+            candidate=candidate,
+            reflective_dataset=reflective_dataset,
+            components_to_update=list(code_keys),
+            task_descriptions=task_descriptions,
+            context_blurbs=context_blurbs,
         )
 
     _original_propose_code = gepa_utils.propose_code
