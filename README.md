@@ -37,7 +37,7 @@ proposer = SkilledProposer(
 
 optimizer = dspy.GEPA(
     metric=metric,
-    reflection_lm=dspy.LM("openai/gpt-5", temperature=1.0, max_tokens=32000),
+    reflection_lm=dspy.LM("openai/gpt-5-6-sol"),
     instruction_proposer=proposer,
     auto="medium",
 )
