@@ -16,7 +16,7 @@ from skilled_proposer.signatures import (
 )
 from skilled_proposer.skill import Skill
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     "SkilledProposer",
