@@ -96,3 +96,24 @@ def test_prompt_engineering_fixture():
     assert s.description.startswith("Use when optimizing")
     assert not s.content.startswith("---")
     assert "Prompt Engineering" in s.content
+
+
+def test_render_skills_empty_is_none_string():
+    from skilled_proposer.skill import render_skills
+
+    assert render_skills([]) == "None"
+
+
+def test_render_skills_blocks():
+    from skilled_proposer.skill import render_skills
+
+    rendered = render_skills(
+        [
+            Skill(name="guide", content="Be terse.", description="A guide."),
+            Skill(name="second", content="Body."),
+        ]
+    )
+    assert "<skill name='guide' description='A guide.'>" in rendered
+    assert "<skill name='second'>" in rendered
+    assert "Be terse." in rendered
+    assert rendered.count("</skill>") == 2

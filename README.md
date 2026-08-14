@@ -87,7 +87,7 @@ SkilledProposer(
 ```
 
 - `base_instructions` replaces the whole meta-prompt, including the anti-overfitting rules. If you still want those rules, include equivalent text in your replacement.
-- `on_error="keep"` logs a failed proposal and keeps the current instruction, so a long GEPA run survives a flaky call. Use `on_error="raise"` during development so failures surface.
+- `on_error="keep"` logs a failed proposal and keeps the current instruction, so a long GEPA run survives a flaky call. Use `on_error="raise"` during development so failures surface. Either way, LM/provider errors (`LMError`) always propagate, so a dead API key fails the run instead of silently keeping unchanged text for the whole run.
 - `max_tokens` counts tokens with litellm's tokenizer when it can resolve your model name, and falls back to about 4 characters per token.
 
 ## Using the standalone gepa package
@@ -105,6 +105,41 @@ proposer = SkilledProposer(
 ```
 
 Then pass `proposer` wherever gepa accepts a `ProposalFn`.
+
+## Using with Flex
+
+dspy 3.3 added [`dspy.Flex`](https://dspy.ai/diving-deeper/flex/), a module that holds its whole implementation as Python source, which GEPA rewrites during optimization. GEPA sends Flex components to a built-in code proposer, and a custom `instruction_proposer` never sees them. The built-in prompt does not warn the reflection model against memorizing the training set, and with code the risk is worse than with instructions. The model can write a branch that matches one training input and returns its answer.
+
+`SkilledCodeProposer` applies this package's approach to Flex source. The reflection model gets the same three step procedure, a rule against overfitting written for code, your reference skills, and your extra guidance. Every proposal is checked before it is used. It must parse and define a class with a `forward` method, or the current source is kept.
+
+dspy has no `code_proposer` hook yet, so this package patches the built-in proposer for the duration of a `compile` call:
+
+```python
+import dspy
+from skilled_proposer import SkilledCodeProposer, SkilledProposer, use_code_proposer
+
+optimizer = dspy.GEPA(
+    metric=metric,
+    reflection_lm=dspy.LM("openai/gpt-5", temperature=1.0, max_tokens=32000),
+    instruction_proposer=SkilledProposer(skills=["./skills/prompt-engineering"]),
+    auto="medium",
+)
+
+code_proposer = SkilledCodeProposer(
+    skills=["./skills/prompt-engineering"],
+    additional_instructions="Prefer few predictors and plain Python.",
+)
+
+with use_code_proposer(code_proposer):
+    optimized = optimizer.compile(program, trainset=train, valset=val)
+```
+
+Notes:
+
+- This feature requires dspy 3.3 or newer. The rest of the package still works with dspy 3.0.
+- dspy logs a warning that a custom `instruction_proposer` skips code components. Under the patch the warning is expected and harmless, because the patched proposer handles them.
+- The patch is a bridge. We are proposing a `code_proposer` parameter for `dspy.GEPA`; once it lands, pass `SkilledCodeProposer` there and drop the patch.
+- `SkilledCodeProposer` takes `skills`, `additional_instructions`, `base_instructions`, `prompt_model`, `max_examples`, and `on_error`, with the same meanings as `SkilledProposer`. There is no length budget for code.
 
 ## Limits
 
