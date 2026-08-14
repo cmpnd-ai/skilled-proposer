@@ -106,7 +106,7 @@ proposer = SkilledProposer(
 
 Then pass `proposer` wherever gepa accepts a `ProposalFn`.
 
-## Flex code proposals
+## Using with Flex
 
 dspy 3.3 added [`dspy.Flex`](https://dspy.ai/diving-deeper/flex/), a module that holds its whole implementation as Python source, which GEPA rewrites during optimization. GEPA sends Flex components to a built-in code proposer, and a custom `instruction_proposer` never sees them. The built-in prompt does not warn the reflection model against memorizing the training set, and with code the risk is worse than with instructions. The model can write a branch that matches one training input and returns its answer.
 
