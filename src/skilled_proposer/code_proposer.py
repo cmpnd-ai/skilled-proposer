@@ -18,13 +18,7 @@ from pathlib import Path
 
 import dspy
 
-try:
-    from dspy.utils.exceptions import LMError
-except ImportError:  # dspy < 3.x fallback: nothing raises it
-    class LMError(Exception):
-        pass
-
-from skilled_proposer.proposer import _render_examples
+from skilled_proposer.proposer import _attempt, _render_examples
 from skilled_proposer.signatures import CodeProposalModule
 from skilled_proposer.skill import Skill, render_skills
 
@@ -95,9 +89,16 @@ class SkilledCodeProposer:
             calls in the reflection LM's context.
         max_examples: Cap on reflective examples rendered per component.
             None = no cap.
-        on_error: "keep" (default) logs a failed or invalid proposal and
-            keeps the current source; "raise" propagates. Either way, an
-            LM/provider error (LMError) always propagates.
+        retries: Extra attempts per component when a proposal fails or
+            does not validate as module source. Ignored when
+            on_error="raise".
+        on_error: What to do when a component's proposal still fails after
+            retries. "skip" (default) logs it and leaves that component
+            out of the returned dict, so GEPA keeps the parent's source
+            and does not spend minibatch evaluations on an unchanged
+            child. "keep" is an alias for "skip". "raise" propagates the
+            first error with no retries. Either way, an LM/provider error
+            (LMError) always propagates.
     """
 
     def __init__(
@@ -107,17 +108,21 @@ class SkilledCodeProposer:
         base_instructions: str | None = None,
         prompt_model: "dspy.LM | None" = None,
         max_examples: int | None = None,
-        on_error: str = "keep",
+        retries: int = 1,
+        on_error: str = "skip",
     ):
-        if on_error not in ("keep", "raise"):
-            raise ValueError('on_error must be "keep" or "raise"')
+        if retries < 0:
+            raise ValueError("retries must be non-negative")
+        if on_error not in ("skip", "keep", "raise"):
+            raise ValueError('on_error must be "skip" or "raise"')
 
         self.skills = [Skill.load(s) for s in (skills or [])]
         self.additional_instructions = (additional_instructions or "").strip()
         self.base_instructions = (base_instructions or "").strip() or None
         self.prompt_model = prompt_model
         self.max_examples = max_examples
-        self.on_error = on_error
+        self.retries = retries
+        self.on_error = "skip" if on_error == "keep" else on_error
 
         self.module = CodeProposalModule(self.base_instructions)
         # Indirection so tests (and callers) can stub the catalog fetch.
@@ -139,24 +144,20 @@ class SkilledCodeProposer:
             examples = list(reflective_dataset.get(name, []))
             if self.max_examples is not None:
                 examples = examples[: self.max_examples]
-            try:
-                results[name] = self._propose_one(
+            proposed = _attempt(
+                lambda: self._propose_one(
                     current,
                     examples,
                     task_descriptions.get(name, name),
                     context_blurbs.get(name, "(no extra context)"),
-                )
-            except LMError:
-                raise
-            except Exception:
-                if self.on_error == "raise":
-                    raise
-                logger.exception(
-                    "SkilledCodeProposer failed for component %r; keeping "
-                    "current source.",
-                    name,
-                )
-                results[name] = current
+                ),
+                name=name,
+                retries=self.retries,
+                on_error=self.on_error,
+                label="SkilledCodeProposer",
+            )
+            if proposed is not None:
+                results[name] = proposed
         return results
 
     # -- Internals ----------------------------------------------------------

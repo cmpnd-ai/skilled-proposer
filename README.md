@@ -82,12 +82,14 @@ SkilledProposer(
     max_tokens=None,               # token cap on proposed instructions
     prompt_model=None,             # (standalone GEPA only)
     max_examples=None,             # cap reflective examples per component
-    on_error="keep",               # "keep" or "raise"
+    retries=1,                     # extra attempts per component on failure
+    on_error="skip",               # "skip" or "raise"
 )
 ```
 
 - `base_instructions` replaces the whole meta-prompt, including the anti-overfitting rules. If you still want those rules, include equivalent text in your replacement.
-- `on_error="keep"` logs a failed proposal and keeps the current instruction, so a long GEPA run survives a flaky call. Use `on_error="raise"` during development so failures surface. Either way, LM/provider errors (`LMError`) always propagate, so a dead API key fails the run instead of silently keeping unchanged text for the whole run.
+- `retries` gives each component that many extra attempts when its proposal fails or comes back unusable. The default is one retry.
+- `on_error="skip"` logs a component whose proposal still fails after retries and leaves it out of the returned dict. GEPA then keeps the parent's text for that component, and when no component survives it skips the proposal without spending minibatch evaluations on a child identical to its parent. `"keep"` is accepted as an alias. Use `on_error="raise"` during development so the first failure surfaces with no retries. Either way, LM/provider errors (`LMError`) always propagate, so a dead API key fails the run instead of silently keeping unchanged text for the whole run.
 - `max_tokens` counts tokens with litellm's tokenizer when it can resolve your model name, and falls back to about 4 characters per token.
 
 ## Using the standalone gepa package
@@ -139,7 +141,7 @@ Notes:
 - This feature requires dspy 3.3 or newer. The rest of the package still works with dspy 3.0.
 - dspy logs a warning that a custom `instruction_proposer` skips code components. Under the patch the warning is expected and harmless, because the patched proposer handles them.
 - The patch is a bridge. We are proposing a `code_proposer` parameter for `dspy.GEPA`; once it lands, pass `SkilledCodeProposer` there and drop the patch.
-- `SkilledCodeProposer` takes `skills`, `additional_instructions`, `base_instructions`, `prompt_model`, `max_examples`, and `on_error`, with the same meanings as `SkilledProposer`. There is no length budget for code.
+- `SkilledCodeProposer` takes `skills`, `additional_instructions`, `base_instructions`, `prompt_model`, `max_examples`, `retries`, and `on_error`, with the same meanings as `SkilledProposer`. A proposal that does not parse, defines no class, or has no `forward` method counts as a failure. There is no length budget for code.
 
 ## Limits
 

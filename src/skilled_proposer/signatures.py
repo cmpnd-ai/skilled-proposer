@@ -139,10 +139,10 @@ class ProposeGeneralizableModuleSource(dspy.Signature):
     1. `def __init__(self):` calls `super().__init__()` and assigns the
        predictors the module needs. Pick the simplest primitive that fits
        each step: `dspy.Predict("...")` for a direct call (the common
-       default), `dspy.ChainOfThought("...")` when explicit reasoning
-       helps, and `dspy.RLM` / `dspy.ReAct` when a step must call tools
-       or explore a large or structured input. Assign no predictors at
-       all if the task needs no LM call.
+       default), `dspy.ReAct` when a step must call tools, and 
+       `dspy.RLM("...")` when a step requires reasoning over a large or 
+       structured input. Assign no predictors at all if the task needs no
+       LM call.
     2. `def forward(self, **inputs):` calls those predictors as
        `self.<name>` and returns `dspy.Prediction(<output fields>=...)`.
 

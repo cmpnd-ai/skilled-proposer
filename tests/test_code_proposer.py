@@ -83,6 +83,8 @@ def _call(proposer, source="class Old(dspy.Module):\n    pass"):
 def test_init_validation():
     with pytest.raises(ValueError):
         SkilledCodeProposer(on_error="explode")
+    with pytest.raises(ValueError):
+        SkilledCodeProposer(retries=-1)
 
 
 def test_proposes_revised_source_per_component():
@@ -100,11 +102,25 @@ def test_fenced_response_is_stripped():
     assert "class GeneratedModule" in out["flex_step"]
 
 
-def test_invalid_source_kept_by_default():
+def test_invalid_source_skipped_by_default():
     pytest.importorskip("dspy.predict.flex")
-    lm = DummyLM([{"revised_source": "not python at all ((("}])
+    lm = DummyLM([{"revised_source": "not python at all ((("}] * 2)
     out = _call(SkilledCodeProposer(prompt_model=lm), source="class Old: pass")
-    assert out["flex_step"] == "class Old: pass"
+    assert out == {}
+
+
+def test_invalid_source_retried_once():
+    pytest.importorskip("dspy.predict.flex")
+    lm = DummyLM([{"revised_source": "not python at all ((("}, {"revised_source": VALID_SRC}])
+    out = _call(SkilledCodeProposer(prompt_model=lm), source="class Old: pass")
+    assert "class GeneratedModule" in out["flex_step"]
+
+
+def test_invalid_source_not_retried_when_retries_zero():
+    pytest.importorskip("dspy.predict.flex")
+    lm = DummyLM([{"revised_source": "not python at all ((("}, {"revised_source": VALID_SRC}])
+    out = _call(SkilledCodeProposer(prompt_model=lm, retries=0), source="class Old: pass")
+    assert out == {}
 
 
 def test_invalid_source_raises_when_asked():
@@ -114,12 +130,12 @@ def test_invalid_source_raises_when_asked():
         _call(SkilledCodeProposer(prompt_model=lm, on_error="raise"))
 
 
-def test_source_without_forward_kept_by_default():
+def test_source_without_forward_skipped_by_default():
     pytest.importorskip("dspy.predict.flex")
     no_forward = "class Old(dspy.Module):\n    def __init__(self):\n        super().__init__()\n"
-    lm = DummyLM([{"revised_source": no_forward}])
+    lm = DummyLM([{"revised_source": no_forward}] * 2)
     out = _call(SkilledCodeProposer(prompt_model=lm), source="class Old: pass")
-    assert out["flex_step"] == "class Old: pass"
+    assert out == {}
 
 
 def test_source_without_forward_raises_when_asked():
@@ -130,7 +146,7 @@ def test_source_without_forward_raises_when_asked():
         _call(SkilledCodeProposer(prompt_model=lm, on_error="raise"))
 
 
-def test_on_error_keep_still_raises_lm_error():
+def test_lm_error_always_propagates():
     from dspy.utils.exceptions import LMError
 
     proposer = SkilledCodeProposer()

@@ -13,6 +13,8 @@ def test_init_validation():
         SkilledProposer(max_words=-1)
     with pytest.raises(ValueError):
         SkilledProposer(on_error="explode")
+    with pytest.raises(ValueError):
+        SkilledProposer(retries=-1)
 
 
 def test_call_proposes_for_each_component():
@@ -26,7 +28,7 @@ def test_call_proposes_for_each_component():
     assert out == {"a": "New A.", "b": "New B."}
 
 
-def test_on_error_keep_returns_current_instruction():
+def test_on_error_skip_omits_component_by_default():
     proposer = SkilledProposer()
 
     def boom(**kwargs):
@@ -38,13 +40,91 @@ def test_on_error_keep_returns_current_instruction():
         reflective_dataset={"a": []},
         components_to_update=["a"],
     )
-    assert out == {"a": "old a"}
+    assert out == {}
 
 
-def test_on_error_raise_propagates():
-    proposer = SkilledProposer(on_error="raise")
+def test_on_error_keep_is_alias_for_skip():
+    proposer = SkilledProposer(on_error="keep")
 
     def boom(**kwargs):
+        raise RuntimeError("boom")
+
+    proposer.module = boom
+    out = proposer(
+        candidate={"a": "old a"},
+        reflective_dataset={"a": []},
+        components_to_update=["a"],
+    )
+    assert out == {}
+
+
+def test_failed_proposal_retried_once_before_skipping():
+    proposer = SkilledProposer()
+    calls = []
+
+    class Result:
+        new_instruction = "New A."
+
+    def flaky(**kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return Result()
+
+    proposer.module = flaky
+    out = proposer(
+        candidate={"a": "old a"},
+        reflective_dataset={"a": []},
+        components_to_update=["a"],
+    )
+    assert out == {"a": "New A."}
+    assert len(calls) == 2
+
+
+def test_retries_zero_skips_on_first_failure():
+    proposer = SkilledProposer(retries=0)
+    calls = []
+
+    def boom(**kwargs):
+        calls.append(1)
+        raise RuntimeError("boom")
+
+    proposer.module = boom
+    out = proposer(
+        candidate={"a": "old a"},
+        reflective_dataset={"a": []},
+        components_to_update=["a"],
+    )
+    assert out == {}
+    assert len(calls) == 1
+
+
+def test_partial_failure_returns_only_successful_components():
+    proposer = SkilledProposer(retries=0)
+
+    class Result:
+        new_instruction = "New B."
+
+    def one_bad(**kwargs):
+        if kwargs["current_instruction"] == "old a":
+            raise RuntimeError("boom")
+        return Result()
+
+    proposer.module = one_bad
+    out = proposer(
+        candidate={"a": "old a", "b": "old b"},
+        reflective_dataset={"a": [], "b": []},
+        components_to_update=["a", "b"],
+    )
+    assert out == {"b": "New B."}
+
+
+def test_on_error_raise_propagates_without_retry():
+    proposer = SkilledProposer(on_error="raise")
+    calls = []
+
+    def boom(**kwargs):
+        calls.append(1)
         raise RuntimeError("boom")
 
     proposer.module = boom
@@ -54,9 +134,10 @@ def test_on_error_raise_propagates():
             reflective_dataset={"a": []},
             components_to_update=["a"],
         )
+    assert len(calls) == 1
 
 
-def test_on_error_keep_still_raises_lm_error():
+def test_lm_error_always_propagates():
     proposer = SkilledProposer()
 
     def boom(**kwargs):

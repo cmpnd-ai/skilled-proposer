@@ -27,6 +27,36 @@ logger = logging.getLogger(__name__)
 _WORD_RE = re.compile(r"\S+")
 
 
+def _attempt(propose, *, name: str, retries: int, on_error: str, label: str):
+    """Run ``propose`` for one component with the shared failure policy.
+
+    Returns the proposal, or None when the component should be left out
+    of the result. LMError always propagates; on_error="raise" propagates
+    the first failure of any kind.
+    """
+    attempts = 1 if on_error == "raise" else retries + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return propose()
+        except LMError:
+            raise
+        except Exception:
+            if on_error == "raise":
+                raise
+            if attempt < attempts:
+                logger.warning(
+                    "%s failed for component %r (attempt %d of %d); retrying.",
+                    label, name, attempt, attempts, exc_info=True,
+                )
+                continue
+            logger.exception(
+                "%s failed for component %r after %d attempt(s); "
+                "leaving it out of the proposal.",
+                label, name, attempts,
+            )
+    return None
+
+
 class SkilledProposer:
     """GEPA `ProposalFn` that proposes generalizable instructions, optionally
     informed by skills, extra guidance, and a length budget.
@@ -51,12 +81,18 @@ class SkilledProposer:
             context; useful with the standalone `gepa` package.
         max_examples: Cap on reflective examples rendered per component, to
             keep the meta-prompt bounded. None = no cap.
-        on_error: What to do when a proposal fails for one component.
-            "keep" (default) logs the error and keeps the current
-            instruction, so long GEPA runs survive flaky proposals.
-            "raise" propagates the error, so failures surface during
-            development. Either way, an LM/provider error (LMError)
-            always propagates.
+        retries: Extra attempts per component when a proposal fails or
+            comes back unusable, before giving up on that component.
+            Ignored when on_error="raise".
+        on_error: What to do when a component's proposal still fails after
+            retries. "skip" (default) logs the error and leaves that
+            component out of the returned dict. GEPA then keeps the
+            parent's text for it, and when no component survives it
+            skips the proposal entirely instead of spending minibatch
+            evaluations on a child identical to its parent. "keep" is an
+            alias for "skip". "raise" propagates the first error with no
+            retries, so failures surface during development. Either way,
+            an LM/provider error (LMError) always propagates.
     """
 
     def __init__(
@@ -68,14 +104,17 @@ class SkilledProposer:
         max_words: int | None = None,
         prompt_model: "dspy.LM | None" = None,
         max_examples: int | None = None,
-        on_error: str = "keep",
+        retries: int = 1,
+        on_error: str = "skip",
     ):
         if max_tokens is not None and max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
         if max_words is not None and max_words <= 0:
             raise ValueError("max_words must be positive")
-        if on_error not in ("keep", "raise"):
-            raise ValueError('on_error must be "keep" or "raise"')
+        if retries < 0:
+            raise ValueError("retries must be non-negative")
+        if on_error not in ("skip", "keep", "raise"):
+            raise ValueError('on_error must be "skip" or "raise"')
 
         self.skills = [Skill.load(s) for s in (skills or [])]
         self.additional_instructions = (additional_instructions or "").strip()
@@ -84,7 +123,8 @@ class SkilledProposer:
         self.max_words = max_words
         self.prompt_model = prompt_model
         self.max_examples = max_examples
-        self.on_error = on_error
+        self.retries = retries
+        self.on_error = "skip" if on_error == "keep" else on_error
 
         # All LM-facing predictors live on a dspy.Module.
         self.module = InstructionProposalModule(self.base_instructions)
@@ -103,18 +143,15 @@ class SkilledProposer:
             examples = list(reflective_dataset.get(name, []))
             if self.max_examples is not None:
                 examples = examples[: self.max_examples]
-            try:
-                results[name] = self._propose_one(current, examples)
-            except LMError:
-                raise
-            except Exception:
-                if self.on_error == "raise":
-                    raise
-                logger.exception(
-                    "SkilledProposer failed for component %r; keeping current text.",
-                    name,
-                )
-                results[name] = current
+            proposed = _attempt(
+                lambda: self._propose_one(current, examples),
+                name=name,
+                retries=self.retries,
+                on_error=self.on_error,
+                label="SkilledProposer",
+            )
+            if proposed is not None:
+                results[name] = proposed
         return results
 
     # -- Internals ----------------------------------------------------------
