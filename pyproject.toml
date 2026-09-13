@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skilled-proposer"
-version = "0.1.2"
+version = "0.2.0"
 description = "A GEPA instruction proposer for DSPy that writes generalizable, skill-informed instructions"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Drew Breunig", email = "dbreunig@gmail.com" }]
-dependencies = ["dspy>=3.0"]
+dependencies = ["dspy>=3.3.1"]
 keywords = ["dspy", "gepa", "prompt-optimization", "llm"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -28,7 +28,11 @@ Homepage = "https://github.com/cmpnd-ai/skilled-proposer"
 Repository = "https://github.com/cmpnd-ai/skilled-proposer"
 
 [tool.uv]
-dev-dependencies = ["pytest>=8.0"]
+dev-dependencies = ["pytest>=8.0", "rapidfuzz>=3.0", "python-dotenv>=1.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skilled_proposer"]

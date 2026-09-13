@@ -2,7 +2,7 @@ import skilled_proposer
 
 
 def test_public_exports():
-    assert skilled_proposer.__version__ == "0.1.2"
+    assert skilled_proposer.__version__ == "0.2.0"
     assert skilled_proposer.SkilledProposer is not None
     assert skilled_proposer.SkilledCodeProposer is not None
     assert skilled_proposer.Skill is not None

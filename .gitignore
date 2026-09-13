@@ -8,3 +8,5 @@ build/
 .ruff_cache/
 .DS_Store
 docs/superpowers/
+benchmarks/results/
+.env
