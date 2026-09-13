@@ -1,7 +1,9 @@
 import json
 
 import pytest
+from dspy.utils.dummies import DummyLM
 
+from skilled_proposer import SkilledProposer
 from skilled_proposer.journal import Journal, JournalEntry
 
 
@@ -138,3 +140,164 @@ def test_render_limit_keeps_newest():
     assert "Iteration 5," in text
     assert "Iteration 3," not in text
     assert "Iteration 1," not in text
+
+
+class FakeState:
+    def __init__(self, candidates, trace):
+        self.program_candidates = candidates
+        self.full_program_trace = [trace]
+
+
+def run_iteration(proposer, iteration, parent, new_text, accepted, reflect_lm_answers=None):
+    """Drive the callbacks GEPA fires for one single-task iteration."""
+    proposer.on_candidate_selected(
+        {"iteration": iteration, "candidate_idx": 0, "candidate": {"predict": parent}, "score": 0.5}
+    )
+    out = proposer(
+        candidate={"predict": parent},
+        reflective_dataset={"predict": [{"Inputs": "x", "Feedback": "wrong"}]},
+        components_to_update=["predict"],
+    )
+    assert out == {"predict": new_text}
+    if accepted:
+        proposer.on_valset_evaluated(
+            {"iteration": iteration, "candidate_idx": 1, "candidate": {"predict": new_text},
+             "average_score": 0.8, "is_best_program": True}
+        )
+        proposer.on_candidate_accepted(
+            {"iteration": iteration, "new_candidate_idx": 1, "new_score": 2.0, "parent_ids": [0]}
+        )
+        trace = {"tasks": [{"parent_idx": 0, "subsample_scores": [0.0, 1.0], "new_subsample_scores": [1.0, 1.0]}]}
+        candidates = [{"predict": parent}, {"predict": new_text}]
+    else:
+        proposer.on_candidate_rejected(
+            {"iteration": iteration, "old_score": 1.0, "new_score": 1.0, "reason": "not better"}
+        )
+        trace = {"tasks": [{"parent_idx": 0, "subsample_scores": [0.0, 1.0], "new_subsample_scores": [0.0, 1.0]}]}
+        candidates = [{"predict": parent}]
+    proposer.on_iteration_end(
+        {"iteration": iteration, "state": FakeState(candidates, trace), "proposal_accepted": accepted}
+    )
+
+
+def test_journal_args_validation(tmp_path):
+    with pytest.raises(ValueError):
+        SkilledProposer(journal_path=tmp_path / "j.json")
+    with pytest.raises(ValueError):
+        SkilledProposer(journal=True, journal_entries=0)
+    with pytest.raises(ValueError):
+        SkilledProposer(journal=True, distill_every=0)
+
+
+def test_journal_off_by_default_renders_none():
+    lm = DummyLM([{"new_instruction": "New."}])
+    proposer = SkilledProposer(prompt_model=lm)
+    proposer(candidate={"a": "old"}, reflective_dataset={"a": []}, components_to_update=["a"])
+    prompt = lm.history[-1]["messages"][-1]["content"]
+    assert "proposal_journal" in prompt
+    assert "No proposals have been recorded yet." not in prompt
+
+
+def test_rejected_then_accepted_entries(tmp_path):
+    lm = DummyLM([
+        {"new_instruction": "meh", "change_summary": "Reworded."},
+        {"new_instruction": "GOOD", "change_summary": "Added a rule."},
+    ])
+    proposer = SkilledProposer(prompt_model=lm, journal=True, journal_path=tmp_path / "j.json", distill_every=None)
+    run_iteration(proposer, 1, "seed", "meh", accepted=False)
+    run_iteration(proposer, 2, "seed", "GOOD", accepted=True)
+
+    first, second = proposer.journal.entries
+    assert first.iteration == 1 and first.task == 0 and first.component == "predict"
+    assert first.parent_idx == 0 and first.parent_text == "seed" and first.proposed_text == "meh"
+    assert first.change_summary == "Reworded."
+    assert first.accepted is False and first.reason == "not better"
+    assert first.minibatch_before == 0.5 and first.minibatch_after == 0.5
+    assert first.valset_average is None and first.closed
+
+    assert second.accepted is True and second.valset_average == 0.8
+    assert second.minibatch_before == 0.5 and second.minibatch_after == 1.0
+    assert second.change_summary == "Added a rule."
+
+    second_prompt = lm.history[1]["messages"][-1]["content"]
+    assert "### Iteration 1, component `predict`, rejected" in second_prompt
+    assert "Change: Reworded." in second_prompt
+
+    saved = Journal.load(tmp_path / "j.json")
+    assert [e.proposed_text for e in saved.entries] == ["meh", "GOOD"]
+
+
+def test_two_tasks_in_one_iteration_pair_by_position():
+    lm = DummyLM([
+        {"new_instruction": "p1", "change_summary": "a"},
+        {"new_instruction": "p2", "change_summary": "b"},
+    ])
+    proposer = SkilledProposer(prompt_model=lm, journal=True, distill_every=None)
+    for _ in range(2):
+        proposer.on_candidate_selected(
+            {"iteration": 1, "candidate_idx": 0, "candidate": {"predict": "seed"}, "score": 0.0}
+        )
+    proposer(candidate={"predict": "seed"}, reflective_dataset={"predict": []}, components_to_update=["predict"])
+    proposer(candidate={"predict": "seed"}, reflective_dataset={"predict": []}, components_to_update=["predict"])
+    proposer.on_candidate_rejected({"iteration": 1, "old_score": 0, "new_score": 0, "reason": "first"})
+    proposer.on_valset_evaluated({"iteration": 1, "candidate_idx": 1, "candidate": {"predict": "p2"},
+                                  "average_score": 0.9, "is_best_program": True})
+    proposer.on_candidate_accepted({"iteration": 1, "new_candidate_idx": 1, "new_score": 2, "parent_ids": [0]})
+    trace = {"tasks": [
+        {"parent_idx": 0, "subsample_scores": [0.0], "new_subsample_scores": [0.0]},
+        {"parent_idx": 0, "subsample_scores": [0.0], "new_subsample_scores": [1.0]},
+    ]}
+    proposer.on_iteration_end({"iteration": 1, "state": FakeState([{"predict": "seed"}, {"predict": "p2"}], trace),
+                               "proposal_accepted": True})
+    a, b = proposer.journal.entries
+    assert (a.task, a.accepted, a.reason) == (0, False, "first")
+    assert (b.task, b.accepted, b.valset_average, b.minibatch_after) == (1, True, 0.9, 1.0)
+
+
+def test_merge_iteration_and_seed_valset_event_are_tolerated():
+    proposer = SkilledProposer(journal=True, distill_every=None)
+    proposer.on_valset_evaluated({"iteration": 0, "candidate_idx": 0, "candidate": {"predict": "seed"},
+                                  "average_score": 0.1, "is_best_program": True})
+    proposer.on_iteration_end({"iteration": 1, "state": FakeState([{"predict": "seed"}], {"tasks": []}),
+                               "proposal_accepted": False})
+    assert proposer.journal.entries == []
+
+
+def test_skipped_iteration_leaves_no_entry():
+    proposer = SkilledProposer(journal=True, distill_every=None)
+    proposer.on_candidate_selected({"iteration": 1, "candidate_idx": 0, "candidate": {"predict": "seed"}, "score": 1.0})
+    proposer.on_iteration_end({"iteration": 1, "state": FakeState([{"predict": "seed"}], {"tasks": [{"parent_idx": 0}]}),
+                               "proposal_accepted": False})
+    assert proposer.journal.entries == []
+
+
+def test_unregistered_callbacks_warn_once_and_still_record(caplog):
+    lm = DummyLM([{"new_instruction": "a", "change_summary": "x"}, {"new_instruction": "b", "change_summary": "y"}])
+    proposer = SkilledProposer(prompt_model=lm, journal=True, distill_every=None)
+    with caplog.at_level("WARNING"):
+        proposer(candidate={"p": "seed"}, reflective_dataset={"p": []}, components_to_update=["p"])
+        proposer(candidate={"p": "seed"}, reflective_dataset={"p": []}, components_to_update=["p"])
+    assert sum("gepa_kwargs" in r.message for r in caplog.records) == 1
+    assert [e.iteration for e in proposer.journal.entries] == [1, 2]
+    assert proposer.journal.entries[0].parent_idx is None
+
+
+def test_gepa_kwargs_registers_self():
+    proposer = SkilledProposer()
+    kwargs = proposer.gepa_kwargs()
+    assert kwargs == {"callbacks": [proposer]}
+    other = object()
+    merged = proposer.gepa_kwargs(callbacks=[other], reflection_minibatch_size=5)
+    assert merged["callbacks"] == [proposer, other]
+    assert merged["reflection_minibatch_size"] == 5
+
+
+def test_journal_loads_from_existing_path(tmp_path):
+    path = tmp_path / "j.json"
+    j = Journal(lessons="old lesson")
+    j.open(entry(iteration=4, accepted=False))
+    j.close(4)
+    j.save(path)
+    proposer = SkilledProposer(journal=True, journal_path=path)
+    assert proposer.journal.lessons == "old lesson"
+    assert len(proposer.journal.entries) == 1
