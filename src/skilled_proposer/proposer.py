@@ -162,6 +162,7 @@ class SkilledProposer:
         kwargs = dict(
             current_instruction=current_instruction,
             examples_with_feedback=_render_examples(examples),
+            proposal_journal="None",
             reference_skills=self._render_skills(),
             additional_guidance=self.additional_instructions or "None",
             length_limit=self._length_limit_text(),

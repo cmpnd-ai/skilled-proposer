@@ -49,6 +49,14 @@ class ProposeGeneralizableInstruction(dspy.Signature):
     crafting the new instruction. Follow any additional guidance from the
     user.
 
+    ## Proposal journal
+
+    A proposal journal, if given, lists earlier proposals for this
+    instruction, what the optimizer did with each one, and lessons
+    distilled from them. Do not repeat an approach the journal shows was
+    rejected. Build on what was accepted. When you write a change summary,
+    name what you changed and why in one or two sentences.
+
     Do not exceed the length limit if one is given.
 
     Output only the new instruction text, ready to be used verbatim.
@@ -60,6 +68,10 @@ class ProposeGeneralizableInstruction(dspy.Signature):
     examples_with_feedback: str = dspy.InputField(
         desc="Inputs, assistant outputs, and evaluator feedback. Use these to "
         "infer the task and diagnose where the instruction fails."
+    )
+    proposal_journal: str = dspy.InputField(
+        desc="Earlier proposals for this instruction, their outcomes, and "
+        "distilled lessons. May be 'None'."
     )
     reference_skills: str = dspy.InputField(
         desc="Reference material (skills) to inform the instruction. May be 'None'."
@@ -85,29 +97,101 @@ class CompressInstruction(dspy.Signature):
     shortened_instruction: str = dspy.OutputField()
 
 
-class InstructionProposalModule(dspy.Module):
-    """dspy.Module housing the proposal and compression predictors.
+class DistillLessons(dspy.Signature):
+    """Read a journal of instruction proposals and their outcomes. Write a
+    short list of lessons about which kinds of instruction changes the
+    optimizer accepted and which it rejected on this task. Each lesson must
+    apply to future proposals, not to one entry. Do not mention specific
+    examples, entities, or numbers from the task. Keep lessons that still
+    hold from the prior list, drop ones the journal now contradicts, and
+    add new ones. Output only the lessons, one per line."""
 
-    Mirrors DSPy's own custom-proposer pattern (see
-    SingleComponentMultiModalProposer in dspy/teleprompt/gepa/
-    instruction_proposal.py): keeping the predictors on a Module makes them
-    discoverable via named_predictors(), lets their state be saved/loaded,
-    and routes calls through the standard Module path (callbacks, history).
+    journal: str = dspy.InputField(desc="The rendered proposal journal.")
+    prior_lessons: str = dspy.InputField(desc="The current lessons, or 'None'.")
+    lessons: str = dspy.OutputField(desc="The updated lessons, one per line.")
+
+
+class DiversifyInstruction(dspy.Signature):
+    """A proposed instruction is too close to earlier attempts that are
+    listed under near duplicates. Write a replacement that takes a
+    materially different approach while still fixing the failures the
+    examples show. Change at least one of: how the task is broken into
+    steps, the decision rules the assistant follows, or the output
+    contract. Do not restate the rejected attempts with new wording.
+
+    ## Generalize — do not overfit
+
+    The instruction will be used on inputs unlike these examples. Every
+    sentence must be equally useful on inputs you have never seen. The
+    specific entities, quantities, dates, and answers in these examples
+    belong to the examples, not the task.
+
+    Reference skills are trusted material the user chose to provide. Draw
+    on them as needed. Follow any additional guidance from the user. Do
+    not exceed the length limit if one is given. Output only the new
+    instruction text, ready to be used verbatim.
     """
 
-    def __init__(self, base_instructions: str | None = None):
+    current_instruction: str = dspy.InputField(
+        desc="The instruction currently given to the assistant."
+    )
+    proposal: str = dspy.InputField(desc="The proposal that was too similar.")
+    near_duplicates: str = dspy.InputField(
+        desc="Earlier attempts the proposal resembles. Take a different approach from all of them."
+    )
+    examples_with_feedback: str = dspy.InputField(
+        desc="Inputs, assistant outputs, and evaluator feedback."
+    )
+    reference_skills: str = dspy.InputField(
+        desc="Reference material (skills) to inform the instruction. May be 'None'."
+    )
+    additional_guidance: str = dspy.InputField(
+        desc="Extra requirements from the user for the new instruction. May be 'None'."
+    )
+    length_limit: str = dspy.InputField(
+        desc="Length limit for the new instruction, or 'None'."
+    )
+    new_instruction: str = dspy.OutputField(
+        desc="A materially different, generalizable instruction. Instruction text only."
+    )
+
+
+def change_summary_field():
+    """A fresh output field, because a FieldInfo must not be shared across signatures."""
+    return dspy.OutputField(desc="One or two sentences naming what you changed and why.")
+
+
+class InstructionProposalModule(dspy.Module):
+    """dspy.Module housing the proposal, diversify, compression, and
+    distillation predictors.
+
+    Keeping the predictors on a Module makes them discoverable via
+    named_predictors(), lets their state be saved/loaded, and routes calls
+    through the standard Module path (callbacks, history).
+    """
+
+    def __init__(self, base_instructions: str | None = None, with_change_summary: bool = False):
         super().__init__()
         signature = ProposeGeneralizableInstruction
+        diversify_signature = DiversifyInstruction
         if base_instructions:
             signature = signature.with_instructions(base_instructions)
+        if with_change_summary:
+            signature = signature.append("change_summary", change_summary_field(), str)
+            diversify_signature = diversify_signature.append(
+                "change_summary", change_summary_field(), str
+            )
         self.propose = dspy.Predict(signature)
+        self.diversify = dspy.Predict(diversify_signature)
         self.compress = dspy.Predict(CompressInstruction)
+        self.distill = dspy.Predict(DistillLessons)
 
     def forward(
         self,
         *,
         current_instruction: str,
         examples_with_feedback: str,
+        proposal_journal: str,
         reference_skills: str,
         additional_guidance: str,
         length_limit: str,
@@ -115,6 +199,7 @@ class InstructionProposalModule(dspy.Module):
         return self.propose(
             current_instruction=current_instruction,
             examples_with_feedback=examples_with_feedback,
+            proposal_journal=proposal_journal,
             reference_skills=reference_skills,
             additional_guidance=additional_guidance,
             length_limit=length_limit,
