@@ -81,3 +81,60 @@ def test_load_missing_file_is_empty(tmp_path):
     j = Journal.load(tmp_path / "missing.json")
     assert j.entries == []
     assert j.lessons == ""
+
+
+def test_render_empty():
+    assert Journal().render(limit=5) == "No proposals have been recorded yet."
+
+
+def test_render_lessons_first_then_entries():
+    j = Journal(lessons="Short rules win.")
+    j.open(entry(iteration=3, accepted=False, reason="tie", minibatch_before=0.5, minibatch_after=0.5,
+                 proposed_text="one two three four", parent_text="one two", change_summary="Added two words."))
+    text = j.render(limit=5)
+    assert text.index("## Lessons") < text.index("## Recent proposals")
+    assert "Short rules win." in text
+    assert "### Iteration 3, component `predict`, rejected" in text
+    assert "Minibatch 0.50 -> 0.50. Not on the valset." in text
+    assert "Change: Added two words." in text
+    assert "Size: 4 words, 2 more than the parent." in text
+    assert "Reason: tie" in text
+    assert "new text" not in text
+
+
+def test_render_accepted_entry_shows_valset():
+    j = Journal()
+    j.open(entry(accepted=True, minibatch_before=0.2, minibatch_after=0.6, valset_average=0.55,
+                 proposed_text="a b", parent_text="a b c"))
+    text = j.render()
+    assert "accepted" in text
+    assert "Valset average 0.55." in text
+    assert "Size: 2 words, 1 fewer than the parent." in text
+    assert "Change: No change summary was given." in text
+
+
+def test_render_not_evaluated_entry_has_no_scores():
+    j = Journal()
+    j.open(entry(proposed_text="x y", parent_text="x y"))
+    text = j.render()
+    assert "not evaluated" in text
+    assert "Minibatch" not in text
+    assert "Size: 2 words, the same as the parent." in text
+
+
+def test_render_duplicate_flags():
+    j = Journal()
+    j.open(entry(near_duplicates=["candidate 1", "rejected entry 2"], duplicate_after_retry=True))
+    text = j.render()
+    assert "Near duplicate of candidate 1, rejected entry 2. Still a near duplicate after a rewrite." in text
+
+
+def test_render_limit_keeps_newest():
+    j = Journal()
+    for i in range(1, 6):
+        j.open(entry(iteration=i))
+    text = j.render(limit=2)
+    assert "Iteration 4," in text
+    assert "Iteration 5," in text
+    assert "Iteration 3," not in text
+    assert "Iteration 1," not in text

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+_WORD_RE = re.compile(r"\S+")
 
 
 @dataclass
@@ -80,6 +83,21 @@ class Journal:
             if e.closed and e.accepted is False and e.component == component
         ]
 
+    # -- Rendering ----------------------------------------------------------
+
+    def render(self, limit: int | None = None) -> str:
+        lessons = self.lessons.strip()
+        entries = self.entries[-limit:] if limit else self.entries
+        if not lessons and not entries:
+            return "No proposals have been recorded yet."
+        parts = []
+        if lessons:
+            parts.append("## Lessons\n\n" + lessons)
+        if entries:
+            blocks = "\n\n".join(_render_entry(e) for e in entries)
+            parts.append("## Recent proposals\n\n" + blocks)
+        return "\n\n".join(parts)
+
     # -- Persistence --------------------------------------------------------
 
     def to_json(self) -> str:
@@ -110,3 +128,36 @@ class Journal:
         if not p.exists():
             return cls()
         return cls.from_json(p.read_text())
+
+
+def _render_entry(e: JournalEntry) -> str:
+    lines = [f"### Iteration {e.iteration}, component `{e.component}`, {e.verdict}"]
+    if e.accepted is not None and e.minibatch_before is not None and e.minibatch_after is not None:
+        score = f"Minibatch {e.minibatch_before:.2f} -> {e.minibatch_after:.2f}."
+        if e.valset_average is not None:
+            score += f" Valset average {e.valset_average:.2f}."
+        else:
+            score += " Not on the valset."
+        lines.append(score)
+    lines.append("Change: " + (e.change_summary.strip() or "No change summary was given."))
+    lines.append(_size_line(e))
+    if e.reason:
+        lines.append(f"Reason: {e.reason}")
+    if e.near_duplicates:
+        dup = "Near duplicate of " + ", ".join(e.near_duplicates) + "."
+        if e.duplicate_after_retry:
+            dup += " Still a near duplicate after a rewrite."
+        lines.append(dup)
+    return "\n".join(lines)
+
+
+def _size_line(e: JournalEntry) -> str:
+    words = len(_WORD_RE.findall(e.proposed_text))
+    delta = words - len(_WORD_RE.findall(e.parent_text))
+    if delta > 0:
+        tail = f"{delta} more than the parent."
+    elif delta < 0:
+        tail = f"{-delta} fewer than the parent."
+    else:
+        tail = "the same as the parent."
+    return f"Size: {words} words, {tail}"
