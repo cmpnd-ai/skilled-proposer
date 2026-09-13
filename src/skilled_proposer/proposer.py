@@ -316,8 +316,21 @@ class SkilledProposer:
                 e.minibatch_after = fmean(after) if after else None
 
     def _distill(self) -> None:
-        """Task 6 fills this in."""
+        """Refresh the lessons from the whole journal. Never raises into GEPA."""
+        try:
+            pred = self._run(
+                self.module.distill,
+                journal=self.journal.render(limit=None),
+                prior_lessons=self.journal.lessons.strip() or "None",
+            )
+            lessons = (pred.lessons or "").strip()
+            if lessons:
+                self.journal.lessons = lessons
+        except Exception:
+            logger.warning("Lesson distillation failed; keeping the prior lessons.", exc_info=True)
         self.journal.closed_since_distill = 0
+        if self.journal_path is not None:
+            self.journal.save(self.journal_path)
 
     # -- Internals ----------------------------------------------------------
 

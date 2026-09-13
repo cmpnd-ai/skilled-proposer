@@ -301,3 +301,47 @@ def test_journal_loads_from_existing_path(tmp_path):
     proposer = SkilledProposer(journal=True, journal_path=path)
     assert proposer.journal.lessons == "old lesson"
     assert len(proposer.journal.entries) == 1
+
+
+def test_distill_runs_after_enough_closed_entries():
+    lm = DummyLM([
+        {"new_instruction": "a", "change_summary": "x"},
+        {"new_instruction": "b", "change_summary": "y"},
+        {"lessons": "Short rules were accepted."},
+        {"new_instruction": "c", "change_summary": "z"},
+    ])
+    proposer = SkilledProposer(prompt_model=lm, journal=True, distill_every=2)
+    run_iteration(proposer, 1, "seed", "a", accepted=False)
+    assert proposer.journal.lessons == ""
+    run_iteration(proposer, 2, "seed", "b", accepted=True)
+    assert proposer.journal.lessons == "Short rules were accepted."
+    assert proposer.journal.closed_since_distill == 0
+    run_iteration(proposer, 3, "b", "c", accepted=False)
+    third_prompt = lm.history[-1]["messages"][-1]["content"]
+    assert "## Lessons" in third_prompt
+    assert "Short rules were accepted." in third_prompt
+
+
+def test_distill_failure_keeps_prior_lessons(caplog):
+    lm = DummyLM([{"new_instruction": "a", "change_summary": "x"}])
+    proposer = SkilledProposer(prompt_model=lm, journal=True, distill_every=1)
+    proposer.journal.lessons = "keep me"
+
+    def boom(**kwargs):
+        raise RuntimeError("distill exploded")
+
+    proposer.module.distill = boom
+    with caplog.at_level("WARNING"):
+        run_iteration(proposer, 1, "seed", "a", accepted=False)
+    assert proposer.journal.lessons == "keep me"
+    assert proposer.journal.closed_since_distill == 0
+    assert any("distill" in r.message.lower() for r in caplog.records)
+
+
+def test_distill_off_when_none():
+    lm = DummyLM([{"new_instruction": "a", "change_summary": "x"}] * 3)
+    proposer = SkilledProposer(prompt_model=lm, journal=True, distill_every=None)
+    for i in range(1, 4):
+        run_iteration(proposer, i, "seed", "a", accepted=False)
+    assert proposer.journal.lessons == ""
+    assert proposer.journal.closed_since_distill == 3
