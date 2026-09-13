@@ -10,12 +10,18 @@ def test_public_exports():
         "SkilledProposer",
         "SkilledCodeProposer",
         "Skill",
+        "Journal",
+        "JournalEntry",
+        "DedupeConfig",
         "InstructionProposalModule",
         "ProposeGeneralizableInstruction",
         "CompressInstruction",
+        "DistillLessons",
+        "DiversifyInstruction",
         "CodeProposalModule",
         "ProposeGeneralizableModuleSource",
         "use_code_proposer",
         "install_code_proposer",
         "uninstall_code_proposer",
     }
+    assert skilled_proposer.DedupeConfig().threshold == 0.85
