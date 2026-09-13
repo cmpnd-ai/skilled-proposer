@@ -12,11 +12,19 @@ DATA_PATH = Path(__file__).with_name("training.csv")
 
 
 def load_rows(path: str | Path = DATA_PATH) -> list[dict]:
+    """Drop rows with a repeated body so one email cannot appear in two splits."""
+    seen_bodies: set[str] = set()
+    rows = []
     with open(path, newline="") as f:
-        return [
-            r for r in csv.DictReader(f)
-            if r.get("committee", "").strip() and r.get("body", "").strip()
-        ]
+        for r in csv.DictReader(f):
+            if not (r.get("committee", "").strip() and r.get("body", "").strip()):
+                continue
+            body = r["body"].strip()
+            if body in seen_bodies:
+                continue
+            seen_bodies.add(body)
+            rows.append(r)
+    return rows
 
 
 def make_examples(rows: list[dict]) -> list[dspy.Example]:
@@ -29,7 +37,7 @@ def make_examples(rows: list[dict]) -> list[dspy.Example]:
 
 def split(
     examples: list[dspy.Example],
-    sizes: tuple[int, int, int] = (600, 200, 200),
+    sizes: tuple[int, int, int] = (556, 200, 200),
     seed: int = 13,
 ) -> tuple[list[dspy.Example], list[dspy.Example], list[dspy.Example]]:
     """Seeded shuffle, then train, validation, and test slices in that order."""

@@ -7,13 +7,19 @@ from benchmarks.committee.task import ExtractCommittee, build_program
 
 def test_data_loads_and_splits_without_overlap():
     rows = load_rows(DATA_PATH)
-    assert len(rows) == 1000
+    assert len(rows) == 956
     examples = make_examples(rows)
-    train, val, test = split(examples, sizes=(600, 200, 200), seed=13)
-    assert (len(train), len(val), len(test)) == (600, 200, 200)
+    train, val, test = split(examples, sizes=(556, 200, 200), seed=13)
+    assert (len(train), len(val), len(test)) == (556, 200, 200)
     bodies = [e.email_body for e in train + val + test]
     assert len(set(bodies)) == len(bodies)
-    assert train[0].inputs().keys() == {"email_body"}
+    assert set(train[0].inputs().keys()) == {"email_body"}
+
+
+def test_load_rows_drops_repeated_bodies():
+    rows = load_rows(DATA_PATH)
+    bodies = [r["body"].strip() for r in rows]
+    assert len(set(bodies)) == len(bodies)
 
 
 def test_split_is_deterministic():
