@@ -21,6 +21,7 @@ except ImportError:  # dspy < 3.x fallback: nothing raises it
     class LMError(Exception):
         pass
 
+from skilled_proposer.dedupe import DedupeConfig, find_duplicates, render_duplicates
 from skilled_proposer.journal import Journal, JournalEntry
 from skilled_proposer.signatures import InstructionProposalModule
 from skilled_proposer.skill import Skill, render_skills
@@ -117,6 +118,12 @@ class SkilledProposer:
         journal_entries: How many recent entries render into the prompt.
         distill_every: Closed entries between lesson distillations. None
             turns distillation off. Ignored when journal is off.
+        dedupe: Experimental. Screen each proposal against earlier rejected
+            proposals and the current candidate pool. On a near duplicate,
+            ask the reflection model once for a materially different
+            approach. True uses DedupeConfig(); pass a DedupeConfig to
+            change the threshold, the retry cap, the sets, or what happens
+            to a proposal that is still a duplicate.
     """
 
     def __init__(
@@ -135,6 +142,7 @@ class SkilledProposer:
         journal_path: str | Path | None = None,
         journal_entries: int = 12,
         distill_every: int | None = 5,
+        dedupe: bool | DedupeConfig = False,
     ):
         if max_tokens is not None and max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
@@ -150,6 +158,14 @@ class SkilledProposer:
             raise ValueError("journal_entries must be positive")
         if distill_every is not None and distill_every <= 0:
             raise ValueError("distill_every must be positive or None")
+        if isinstance(dedupe, DedupeConfig):
+            self.dedupe: DedupeConfig | None = dedupe
+        elif dedupe is True:
+            self.dedupe = DedupeConfig()
+        elif dedupe is False:
+            self.dedupe = None
+        else:
+            raise ValueError("dedupe must be a bool or a DedupeConfig")
 
         self.skills = [Skill.load(s) for s in (skills or [])]
         self.additional_instructions = (additional_instructions or "").strip()
@@ -352,12 +368,68 @@ class SkilledProposer:
             length_limit=self._length_limit_text(),
         )
         pred = self._run(self.module, **kwargs)
-        proposal = Proposal(
-            text=pred.new_instruction.strip(),
-            change_summary=(getattr(pred, "change_summary", "") or "").strip(),
-        )
+        proposal = _proposal_from(pred)
+
+        if self.dedupe is not None:
+            proposal = self._screen(name, current_instruction, proposal, kwargs)
+            if proposal is None:
+                return None
+
         proposal.text = self._enforce_length(proposal.text)
         return proposal
+
+    def _screen(
+        self, name: str, current_instruction: str, proposal: Proposal, kwargs: dict[str, Any]
+    ) -> Proposal | None:
+        """Diversify a near-duplicate proposal at most max_retries times."""
+        config = self.dedupe
+        screening = self._screening_set(name, current_instruction)
+        matches = find_duplicates(proposal.text, screening, config.threshold)
+        if not matches:
+            return proposal
+        self.stats["duplicates"] += 1
+        first_labels = [label for label, _, _ in matches]
+
+        calls = 0
+        while matches and calls < config.max_retries:
+            calls += 1
+            pred = self._run(
+                self.module.diversify,
+                current_instruction=current_instruction,
+                proposal=proposal.text,
+                near_duplicates=render_duplicates(matches),
+                examples_with_feedback=kwargs["examples_with_feedback"],
+                reference_skills=kwargs["reference_skills"],
+                additional_guidance=kwargs["additional_guidance"],
+                length_limit=kwargs["length_limit"],
+            )
+            proposal = _proposal_from(pred)
+            matches = find_duplicates(proposal.text, screening, config.threshold)
+
+        proposal.near_duplicates = first_labels
+        if matches:
+            proposal.duplicate_after_retry = True
+            self.stats["duplicates_after_retry"] += 1
+            if config.on_duplicate == "skip":
+                logger.info(
+                    "Proposal for component %r is still a near duplicate after %d "
+                    "diversify call(s); leaving it out.", name, calls,
+                )
+                return None
+        return proposal
+
+    def _screening_set(self, name: str, parent_text: str) -> list[tuple[str, str]]:
+        items: list[tuple[str, str]] = []
+        if "rejected" in self.dedupe.against:
+            for i, text in enumerate(self.journal.rejected_texts(name), 1):
+                items.append((f"rejected entry {i}", text))
+        if "pool" in self.dedupe.against:
+            items.append(("the current instruction", parent_text))
+            for i, candidate in enumerate(self._pool, 1):
+                text = candidate.get(name)
+                if text is not None and text != parent_text:
+                    items.append((f"candidate {i}", text))
+        return items
 
     def _render_journal(self) -> str:
         if not self.journal_enabled:
@@ -436,6 +508,13 @@ class SkilledProposer:
 
 def _count_words(text: str) -> int:
     return len(_WORD_RE.findall(text))
+
+
+def _proposal_from(pred: Any) -> Proposal:
+    return Proposal(
+        text=pred.new_instruction.strip(),
+        change_summary=(getattr(pred, "change_summary", "") or "").strip(),
+    )
 
 
 def _count_tokens(text: str, model: str | None) -> int:
