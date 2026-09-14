@@ -50,3 +50,57 @@ def test_program_shape():
     assert set(ExtractCommittee.input_fields) == {"email_body"}
     assert set(ExtractCommittee.output_fields) == {"committee"}
     assert [name for name, _ in program.named_predictors()] == ["extract"]
+
+
+import json
+
+from benchmarks.committee.ablations import ABLATIONS, resolve
+from benchmarks.committee import report
+from skilled_proposer import SkilledProposer
+
+
+def test_ablation_registry_names():
+    assert list(ABLATIONS) == ["stock", "baseline", "journal", "dedupe", "journal+dedupe"]
+    assert [a.name for a in resolve(["all"])] == list(ABLATIONS)
+    assert [a.name for a in resolve(["journal", "stock"])] == ["journal", "stock"]
+
+
+def test_ablation_builds_proposer_or_none(tmp_path):
+    stock = ABLATIONS["stock"]()
+    assert stock.build_proposer(tmp_path) is None
+    both = ABLATIONS["journal+dedupe"]()
+    proposer = both.build_proposer(tmp_path)
+    assert isinstance(proposer, SkilledProposer)
+    assert proposer.journal_enabled and proposer.dedupe is not None
+    assert proposer.journal_path == tmp_path / "journal.json"
+    kwargs = both.gepa_kwargs(proposer, extra_callbacks=[object()])
+    assert kwargs["callbacks"][0] is proposer and len(kwargs["callbacks"]) == 2
+
+
+def test_report_table_and_curves(tmp_path):
+    for name, score in (("stock", 0.5), ("journal", 0.7)):
+        d = tmp_path / name / "13"
+        d.mkdir(parents=True)
+        (d / "summary.json").write_text(json.dumps({
+            "ablation": name, "seed": 13, "test_score": score, "best_valset_score": score,
+            "metric_calls_to_best": 100, "accept_rate": 0.25, "reflection_calls": 10,
+            "duplicates": 1, "duplicates_after_retry": 0, "auc_valset_vs_calls": 12.0,
+        }))
+        (d / "trajectory.jsonl").write_text(json.dumps({"iteration": 1, "metric_calls_used": 10,
+                                                        "best_valset_score": score}) + "\n")
+    summaries = report.load_summaries(tmp_path)
+    table = report.build_table(summaries)
+    assert "journal" in table and "0.700" in table
+    out = tmp_path / "curves.csv"
+    report.write_curves(tmp_path, out)
+    lines = out.read_text().splitlines()
+    assert lines[0] == "ablation,seed,iteration,metric_calls_used,best_valset_score"
+    assert len(lines) == 3
+
+
+def test_run_dry_run_makes_no_lm_calls(capsys):
+    from benchmarks.committee.run import main
+    main(["--dry-run"])
+    out = capsys.readouterr().out
+    assert "556 train / 200 val / 200 test" in out
+    assert "metric self-check passed" in out
