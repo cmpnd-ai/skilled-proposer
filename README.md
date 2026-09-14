@@ -216,14 +216,14 @@ with use_code_proposer(code_proposer):
 
 Notes:
 
-- This feature requires dspy 3.3 or newer. The rest of the package still works with dspy 3.0.
+- This feature requires dspy 3.3 or newer, which the package already requires.
 - dspy logs a warning that a custom `instruction_proposer` skips code components. Under the patch the warning is expected and harmless, because the patched proposer handles them.
 - The patch is a bridge. We are proposing a `code_proposer` parameter for `dspy.GEPA`; once it lands, pass `SkilledCodeProposer` there and drop the patch.
 - `SkilledCodeProposer` takes `skills`, `additional_instructions`, `base_instructions`, `prompt_model`, `max_examples`, `retries`, and `on_error`, with the same meanings as `SkilledProposer`. A proposal that does not parse, defines no class, or has no `forward` method counts as a failure. There is no length budget for code.
 
 ## Limits
 
-- v0.1 is text only. Rich values such as `dspy.Image` are stringified in the reflective examples, so the reflection model cannot see them. Multimodal support is planned for v0.2.
+- The proposer is text only. Rich values such as `dspy.Image` are stringified in the reflective examples, so the reflection model cannot see them. Multimodal support is planned for a later release.
 
 ## License
 
