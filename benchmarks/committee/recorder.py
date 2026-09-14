@@ -31,7 +31,9 @@ class TrajectoryRecorder:
         score = event["average_score"]
         if self.best_valset_score is None or score > self.best_valset_score:
             self.best_valset_score = score
-            self.metric_calls_to_best = self.metric_calls_used
+            calls = self.metric_calls_used if self.metric_calls_used > 0 else event.get("num_examples_evaluated", 0)
+            self.metric_calls_to_best = calls
+            self.metric_calls_used = calls
 
     def on_candidate_accepted(self, event: Mapping[str, Any]) -> None:
         self._current["verdict"] = "accepted"

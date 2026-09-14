@@ -57,6 +57,13 @@ def test_summary_fields():
     assert s["auc_valset_vs_calls"] > 0
 
 
+def test_seed_best_counts_its_valset_cost():
+    r = TrajectoryRecorder()
+    r.on_valset_evaluated({"iteration": 0, "candidate_idx": 0, "candidate": {}, "average_score": 0.4,
+                           "num_examples_evaluated": 3, "is_best_program": True})
+    assert r.summary()["metric_calls_to_best"] == 3
+
+
 def test_write_trajectory(tmp_path):
     r = TrajectoryRecorder()
     drive(r)
