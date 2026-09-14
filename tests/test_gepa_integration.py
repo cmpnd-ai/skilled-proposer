@@ -101,3 +101,35 @@ def test_dedupe_runs_inside_gepa(data):
     assert proposer.stats["duplicates"] >= 1
     diversify_prompt = reflection.history[1]["messages"][-1]["content"]
     assert "near_duplicates" in diversify_prompt
+
+
+def test_recorder_writes_one_row_per_iteration(data, tmp_path):
+    from benchmarks.committee.recorder import TrajectoryRecorder
+
+    reflection = DummyLM([{"new_instruction": "meh"}, {"new_instruction": "GOOD"}] + [{"new_instruction": "GOOD"}] * 10)
+    proposer = SkilledProposer()
+    recorder = TrajectoryRecorder()
+    train, val = data
+    optimizer = dspy.GEPA(
+        metric=metric,
+        reflection_lm=reflection,
+        instruction_proposer=proposer,
+        max_metric_calls=30,
+        reflection_minibatch_size=2,
+        num_threads=1,
+        use_merge=False,
+        seed=0,
+        gepa_kwargs=proposer.gepa_kwargs(callbacks=[recorder]),
+    )
+    optimizer.compile(Program(), trainset=train, valset=val)
+
+    assert recorder.rows
+    assert [r["iteration"] for r in recorder.rows] == list(range(1, len(recorder.rows) + 1))
+    summary = recorder.summary()
+    assert set(summary) == {
+        "iterations", "best_valset_score", "metric_calls_to_best", "accept_rate",
+        "reflection_calls", "metric_calls_used", "auc_valset_vs_calls",
+    }
+    assert summary["best_valset_score"] == 1.0
+    recorder.write_trajectory(tmp_path / "t.jsonl")
+    assert len((tmp_path / "t.jsonl").read_text().splitlines()) == len(recorder.rows)
