@@ -110,6 +110,8 @@ Set `journal_path` to keep the journal in a JSON file. The proposer writes it af
 
 The journal needs the callbacks. Pass `gepa_kwargs=proposer.gepa_kwargs()` to `dspy.GEPA`. If the callbacks are missing, the proposer logs one warning and records proposals without verdicts.
 
+The journal pairs a verdict to a proposal by position within the iteration. It assumes one proposal per iteration, which is GEPA's default sampling.
+
 ## Dedupe (experimental)
 
 GEPA checks that a proposal differs from its parent, but nothing stops the reflection model from proposing an approach that already failed in an earlier iteration or that already sits in the candidate pool. With `dedupe=True` the proposer screens each proposal against the journal's rejected proposals for that component and against the current candidate pool, including the parent. Two texts count as near duplicates when either their character sequence ratio or their token overlap reaches the threshold.

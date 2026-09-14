@@ -254,6 +254,38 @@ def test_two_tasks_in_one_iteration_pair_by_position():
     assert (b.task, b.accepted, b.valset_average, b.minibatch_after) == (1, True, 0.9, 1.0)
 
 
+def test_two_tasks_with_mixed_verdicts_are_paired_by_position_only():
+    lm = DummyLM([
+        {"new_instruction": "p1", "change_summary": "a"},
+        {"new_instruction": "p2", "change_summary": "b"},
+    ])
+    proposer = SkilledProposer(prompt_model=lm, journal=True, distill_every=None)
+    for _ in range(2):
+        proposer.on_candidate_selected(
+            {"iteration": 1, "candidate_idx": 0, "candidate": {"predict": "seed"}, "score": 0.0}
+        )
+    proposer(candidate={"predict": "seed"}, reflective_dataset={"predict": []}, components_to_update=["predict"])
+    proposer(candidate={"predict": "seed"}, reflective_dataset={"predict": []}, components_to_update=["predict"])
+    # gepa fires on_candidate_rejected for the non-selected proposal (task 1's "p2")
+    # before on_valset_evaluated and on_candidate_accepted for the selected one (task 0's "p1").
+    proposer.on_candidate_rejected({"iteration": 1, "old_score": 0, "new_score": 0, "reason": "task 1 rejected"})
+    proposer.on_valset_evaluated({"iteration": 1, "candidate_idx": 1, "candidate": {"predict": "p1"},
+                                  "average_score": 0.9, "is_best_program": True})
+    proposer.on_candidate_accepted({"iteration": 1, "new_candidate_idx": 1, "new_score": 2, "parent_ids": [0]})
+    trace = {"tasks": [
+        {"parent_idx": 0, "subsample_scores": [0.0], "new_subsample_scores": [0.0]},
+        {"parent_idx": 0, "subsample_scores": [0.0], "new_subsample_scores": [1.0]},
+    ]}
+    proposer.on_iteration_end({"iteration": 1, "state": FakeState([{"predict": "seed"}, {"predict": "p1"}], trace),
+                               "proposal_accepted": True})
+    a, b = proposer.journal.entries
+    # Pins the documented single-task-per-iteration assumption: positional pairing
+    # attaches the rejection to task 0 and the acceptance to task 1 regardless of
+    # which task gepa actually rejected or accepted.
+    assert (a.task, a.accepted) == (0, False)
+    assert (b.task, b.accepted) == (1, True)
+
+
 def test_merge_iteration_and_seed_valset_event_are_tolerated():
     proposer = SkilledProposer(journal=True, distill_every=None)
     proposer.on_valset_evaluated({"iteration": 0, "candidate_idx": 0, "candidate": {"predict": "seed"},
@@ -287,9 +319,9 @@ def test_gepa_kwargs_registers_self():
     kwargs = proposer.gepa_kwargs()
     assert kwargs == {"callbacks": [proposer]}
     other = object()
-    merged = proposer.gepa_kwargs(callbacks=[other], reflection_minibatch_size=5)
+    merged = proposer.gepa_kwargs(callbacks=[other], acceptance_criterion="x")
     assert merged["callbacks"] == [proposer, other]
-    assert merged["reflection_minibatch_size"] == 5
+    assert merged["acceptance_criterion"] == "x"
 
 
 def test_journal_loads_from_existing_path(tmp_path):

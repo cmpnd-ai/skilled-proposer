@@ -88,6 +88,31 @@ def test_journal_appears_from_second_iteration(data, tmp_path):
     assert (tmp_path / "journal.json").exists()
 
 
+def test_distillation_runs_on_the_reflection_model(data):
+    reflection = DummyLM([
+        {"new_instruction": "meh", "change_summary": "a"},
+        {"lessons": "Short rules win."},
+        {"new_instruction": "GOOD instruction", "change_summary": "b"},
+        {"lessons": "GOOD rules win."},
+    ] + [{"new_instruction": "GOOD again", "change_summary": "c"}, {"lessons": "same"}] * 10)
+    proposer = SkilledProposer(journal=True, distill_every=1)
+
+    run_gepa(proposer, reflection, data)
+
+    assert proposer.journal.lessons
+    assert any(
+        "[[ ## prior_lessons ## ]]" in message["content"]
+        for call in reflection.history
+        for message in call["messages"]
+    )
+    student = dspy.settings.lm
+    assert not any(
+        "prior_lessons" in message["content"]
+        for call in student.history
+        for message in call["messages"]
+    )
+
+
 def test_dedupe_runs_inside_gepa(data):
     reflection = DummyLM([
         {"new_instruction": "Given the fields `question`, produce the fields `answer`!"},

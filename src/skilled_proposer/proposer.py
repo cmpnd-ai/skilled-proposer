@@ -112,6 +112,9 @@ class SkilledProposer:
             Register the proposer's callbacks with
             ``dspy.GEPA(gepa_kwargs=proposer.gepa_kwargs())``; without
             that, the journal records proposals but never their verdicts.
+            The journal pairs a verdict to a proposal by position within
+            the iteration, which assumes one proposal per iteration, GEPA's
+            default sampling.
         journal_path: Optional JSON file for the journal. Loaded when it
             exists and written after every iteration, so a resumed run keeps
             its record. Requires journal=True.
@@ -191,6 +194,10 @@ class SkilledProposer:
         self._pending_parents: list[tuple[int, dict[str, str]]] = []
         self._calls_this_iteration = 0
         self._pool: list[dict[str, str]] = []
+        # The reflection LM is ambient only during the proposal call (dspy.GEPA
+        # wraps that call in dspy.context(lm=reflection_lm)), so it is captured
+        # here for distillation, which runs later from a callback.
+        self._reflection_lm: "dspy.LM | None" = None
 
         # All LM-facing predictors live on a dspy.Module.
         self.module = InstructionProposalModule(
@@ -206,6 +213,8 @@ class SkilledProposer:
         components_to_update: list[str],
         **kwargs: Any,
     ) -> dict[str, str]:
+        if self.prompt_model is None:
+            self._reflection_lm = getattr(dspy.settings, "lm", None)
         parent_idx = self._begin_call()
         task = self._calls_this_iteration
         self._calls_this_iteration += 1
@@ -247,12 +256,14 @@ class SkilledProposer:
         if not self._callbacks_seen:
             self._iteration += 1
             self._calls_this_iteration = 0
-            if self.journal_enabled and not self._warned_unregistered:
+            screens_pool = self.dedupe is not None and "pool" in self.dedupe.against
+            if (self.journal_enabled or screens_pool) and not self._warned_unregistered:
                 self._warned_unregistered = True
                 logger.warning(
                     "SkilledProposer callbacks are not registered, so the journal "
-                    "will record proposals without verdicts. Pass "
-                    "gepa_kwargs=proposer.gepa_kwargs() to dspy.GEPA."
+                    "records proposals without verdicts and pool screening sees "
+                    "only the parent. Pass gepa_kwargs=proposer.gepa_kwargs() to "
+                    "dspy.GEPA."
                 )
         if self._pending_parents:
             parent_idx, _ = self._pending_parents.pop(0)
@@ -316,10 +327,18 @@ class SkilledProposer:
         self._attach_minibatch_scores(iteration, state)
         self.journal.close(iteration)
         self._pool = [dict(c) for c in getattr(state, "program_candidates", [])]
-        if self.journal_path is not None:
-            self.journal.save(self.journal_path)
+        self._save_journal()
         if self.distill_every and self.journal.closed_since_distill >= self.distill_every:
             self._distill()
+
+    def _save_journal(self) -> None:
+        """Write the journal to journal_path. Logs and never raises on failure."""
+        if self.journal_path is None:
+            return
+        try:
+            self.journal.save(self.journal_path)
+        except Exception:
+            logger.warning("Failed to save the journal to %s.", self.journal_path, exc_info=True)
 
     def _attach_minibatch_scores(self, iteration: int, state: Any) -> None:
         trace = state.full_program_trace[-1] if getattr(state, "full_program_trace", None) else {}
@@ -334,19 +353,22 @@ class SkilledProposer:
     def _distill(self) -> None:
         """Refresh the lessons from the whole journal. Never raises into GEPA."""
         try:
-            pred = self._run(
-                self.module.distill,
+            kwargs = dict(
                 journal=self.journal.render(limit=None),
                 prior_lessons=self.journal.lessons.strip() or "None",
             )
+            if self.prompt_model is None and self._reflection_lm is not None:
+                with dspy.context(lm=self._reflection_lm):
+                    pred = self.module.distill(**kwargs)
+            else:
+                pred = self._run(self.module.distill, **kwargs)
             lessons = (pred.lessons or "").strip()
             if lessons:
                 self.journal.lessons = lessons
         except Exception:
             logger.warning("Lesson distillation failed; keeping the prior lessons.", exc_info=True)
         self.journal.closed_since_distill = 0
-        if self.journal_path is not None:
-            self.journal.save(self.journal_path)
+        self._save_journal()
 
     # -- Internals ----------------------------------------------------------
 

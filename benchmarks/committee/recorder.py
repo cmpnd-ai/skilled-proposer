@@ -9,7 +9,12 @@ from typing import Any, Mapping
 
 
 class TrajectoryRecorder:
-    """A GEPACallback that does not depend on which proposer is running."""
+    """A GEPACallback that does not depend on which proposer is running.
+
+    Like the journal, this recorder pairs a verdict to a proposal by
+    position within the iteration and assumes one proposal per iteration,
+    GEPA's default sampling.
+    """
 
     def __init__(self):
         self.rows: list[dict[str, Any]] = []

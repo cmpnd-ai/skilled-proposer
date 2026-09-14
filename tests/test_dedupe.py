@@ -168,6 +168,14 @@ def test_against_rejected_only_ignores_parent():
     assert len(lm.history) == 1
 
 
+def test_unregistered_callbacks_warn_once_when_dedupe_screens_pool(caplog):
+    lm = DummyLM([{"new_instruction": "x"}])
+    proposer = SkilledProposer(prompt_model=lm, dedupe=True)
+    with caplog.at_level("WARNING"):
+        propose(proposer)
+    assert sum("gepa_kwargs" in r.message for r in caplog.records) == 1
+
+
 def test_diversified_text_gets_length_enforced():
     long_far = FAR + " " + " ".join(["extra"] * 40)
     lm = DummyLM([
