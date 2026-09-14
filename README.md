@@ -18,7 +18,7 @@ GEPA improves a program by asking a reflection model to rewrite each component's
 pip install skilled-proposer
 ```
 
-Requires Python 3.10 or newer and dspy 3.0 or newer.
+Requires Python 3.10 or newer and dspy 3.3.1 or newer.
 
 ## Quickstart
 
@@ -37,13 +37,16 @@ proposer = SkilledProposer(
 
 optimizer = dspy.GEPA(
     metric=metric,
-    reflection_lm=dspy.LM("openai/gpt-5-6-sol"),
+    reflection_lm=dspy.LM("openai/gpt-5.6-luna"),
     instruction_proposer=proposer,
+    gepa_kwargs=proposer.gepa_kwargs(),
     auto="medium",
 )
 
 optimized = optimizer.compile(program, trainset=train, valset=val)
 ```
+
+`gepa_kwargs=proposer.gepa_kwargs()` registers the proposer's callbacks with GEPA. The journal and dedupe features below read those callbacks. Without them the journal records proposals but never learns what GEPA did with them.
 
 ## Skills
 
@@ -84,6 +87,11 @@ SkilledProposer(
     max_examples=None,             # cap reflective examples per component
     retries=1,                     # extra attempts per component on failure
     on_error="skip",               # "skip" or "raise"
+    journal=False,                 # experimental, see below
+    journal_path=None,             # JSON file for the journal
+    journal_entries=12,            # entries shown to the reflection model
+    distill_every=5,               # entries between lesson distillations
+    dedupe=False,                  # experimental, see below
 )
 ```
 
@@ -91,6 +99,76 @@ SkilledProposer(
 - `retries` gives each component that many extra attempts when its proposal fails or comes back unusable. The default is one retry.
 - `on_error="skip"` logs a component whose proposal still fails after retries and leaves it out of the returned dict. GEPA then keeps the parent's text for that component, and when no component survives it skips the proposal without spending minibatch evaluations on a child identical to its parent. `"keep"` is accepted as an alias. Use `on_error="raise"` during development so the first failure surfaces with no retries. Either way, LM/provider errors (`LMError`) always propagate, so a dead API key fails the run instead of silently keeping unchanged text for the whole run.
 - `max_tokens` counts tokens with litellm's tokenizer when it can resolve your model name, and falls back to about 4 characters per token.
+
+## Proposal journal (experimental)
+
+GEPA calls the proposer many times in one run, and each call sees only the current instruction and a fresh set of examples. The reflection model has no memory of what it proposed before or whether GEPA kept it. With `journal=True` the proposer records each proposal, the reflection model's own summary of what it changed, the minibatch scores before and after, the valset score when GEPA evaluated it, and whether GEPA accepted or rejected it. Every later call shows the reflection model the newest `journal_entries` entries under a `proposal_journal` field, and the meta-prompt tells it not to repeat an approach the journal shows was rejected.
+
+Every `distill_every` closed entries, the proposer asks the reflection model to distill the whole journal into a short list of lessons. The lessons appear above the entries on every later call. A failed distillation keeps the prior lessons.
+
+Set `journal_path` to keep the journal in a JSON file. The proposer writes it after every iteration and loads it when the file exists, so a run resumed from GEPA's `log_dir` keeps its record. The file is also the easiest way to read what the reflection model tried.
+
+The journal needs the callbacks. Pass `gepa_kwargs=proposer.gepa_kwargs()` to `dspy.GEPA`. If the callbacks are missing, the proposer logs one warning and records proposals without verdicts.
+
+## Dedupe (experimental)
+
+GEPA checks that a proposal differs from its parent, but nothing stops the reflection model from proposing an approach that already failed in an earlier iteration or that already sits in the candidate pool. With `dedupe=True` the proposer screens each proposal against the journal's rejected proposals for that component and against the current candidate pool, including the parent. Two texts count as near duplicates when either their character sequence ratio or their token overlap reaches the threshold.
+
+On a match, the proposer asks the reflection model once for an instruction that takes a materially different approach while still fixing the diagnosed failures. The number of those calls is capped, so a run cannot loop. When the rewrite is still a near duplicate, the default returns it anyway and lets GEPA's minibatch check judge it. The journal marks the entry, so the reflection model sees when it has been repeating itself.
+
+Pass a `DedupeConfig` to change the defaults:
+
+```python
+from skilled_proposer import DedupeConfig, SkilledProposer
+
+proposer = SkilledProposer(
+    journal=True,
+    dedupe=DedupeConfig(
+        threshold=0.85,                 # similarity that counts as a duplicate
+        max_retries=1,                  # rewrite calls per proposal
+        against=("rejected", "pool"),   # what to screen against
+        on_duplicate="return",          # or "skip" to leave the component out
+    ),
+)
+```
+
+`on_duplicate="skip"` drops the component, and GEPA then skips a proposal that has no changed components without spending minibatch evaluations on it. Dedupe works without the journal. It then screens against the pool and the parent only.
+
+## Recommended engine settings
+
+These are GEPA engine settings, passed through `gepa_kwargs`, that pair well with this proposer:
+
+- A larger `reflection_minibatch_size` gives the reflection model more failures to diagnose per call.
+- `acceptance_criterion=ImprovementOrEqualAcceptance()` from `gepa.strategies.acceptance` lets a proposal that ties its parent on the minibatch through to the valset, which helps when the minibatch is small.
+- `candidate_selection_strategy="epsilon_greedy"` on `dspy.GEPA` explores parents off the Pareto front some of the time.
+
+```python
+from gepa.strategies.acceptance import ImprovementOrEqualAcceptance
+
+optimizer = dspy.GEPA(
+    metric=metric,
+    reflection_lm=dspy.LM("openai/gpt-5.6-luna"),
+    instruction_proposer=proposer,
+    reflection_minibatch_size=5,
+    candidate_selection_strategy="epsilon_greedy",
+    gepa_kwargs=proposer.gepa_kwargs(acceptance_criterion=ImprovementOrEqualAcceptance()),
+    auto="medium",
+)
+```
+
+## Benchmarks
+
+`benchmarks/committee/` runs GEPA on one task, extracting the sponsoring committee from a political fundraising email, under named configurations and records how each run progresses. The data and metric come from Derek Willis's political-fundraising-emails project under the MIT license. See `benchmarks/committee/ATTRIBUTION.md`.
+
+The student is a small model served by LM Studio. The reflection model is read from the environment. Put keys in a `.env` file in the repo root.
+
+```bash
+uv run python -m benchmarks.committee.run --dry-run
+uv run python -m benchmarks.committee.run --ablations all --max-metric-calls 1500
+uv run python -m benchmarks.committee.report
+```
+
+Each run writes a trajectory, a summary, the optimized program, and the journal when there is one, under `benchmarks/results/`. The report prints one row per configuration with the test score of the best program, the best valset score, metric calls to reach it, accept rate, reflection calls, and duplicates, and writes the curves to a CSV.
 
 ## Using the standalone gepa package
 
@@ -102,7 +180,7 @@ proposer = SkilledProposer(
         "./skills/prompt-engineering",
         "./skills/prompt-engineering/models/openai.md",
     ],
-    prompt_model=dspy.LM("openai/gpt-5", temperature=1.0, max_tokens=32000),
+    prompt_model=dspy.LM("openai/gpt-5.6-luna"),
 )
 ```
 
@@ -122,7 +200,7 @@ from skilled_proposer import SkilledCodeProposer, SkilledProposer, use_code_prop
 
 optimizer = dspy.GEPA(
     metric=metric,
-    reflection_lm=dspy.LM("openai/gpt-5", temperature=1.0, max_tokens=32000),
+    reflection_lm=dspy.LM("openai/gpt-5.6-luna"),
     instruction_proposer=SkilledProposer(skills=["./skills/prompt-engineering"]),
     auto="medium",
 )
