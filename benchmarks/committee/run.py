@@ -5,6 +5,8 @@
 
 Keys and endpoints come from the environment. A .env file in the working
 directory is loaded first. STUDENT_API_KEY is optional for LM Studio.
+When CMPND_API_KEY is set, every student call, reflection call, and GEPA
+run is traced to cmpnd under the tags below.
 """
 
 from __future__ import annotations
@@ -101,6 +103,28 @@ def run_one(ablation: Ablation, seed: int, args, train, val, test, reflection_lm
     return summary
 
 
+TRACE_TAGS = ["skilled-proposer", "committee-benchmark"]
+
+
+def configure_tracing() -> bool:
+    """Turn on cmpnd tracing when CMPND_API_KEY is set. Returns whether it is on."""
+    if not os.environ.get("CMPND_API_KEY"):
+        print("[trace] CMPND_API_KEY is not set, so tracing is off")
+        return False
+    import cmpnd
+
+    cmpnd.configure(project_tags=TRACE_TAGS)
+    cmpnd.auto_instrument()
+    print(f"[trace] cmpnd tracing on, tags={TRACE_TAGS}")
+    return True
+
+
+def flush_tracing() -> None:
+    import cmpnd
+
+    cmpnd.flush_exporter()
+
+
 def main(argv=None) -> None:
     load_dotenv()
     args = parse_args(argv)
@@ -118,19 +142,24 @@ def main(argv=None) -> None:
     reflection = build_reflection(args.reflection_model)
     dspy.configure(lm=student, adapter=dspy.XMLAdapter())
     print(f"[lm] student={args.student_model} reflection={args.reflection_model}")
+    tracing = configure_tracing()
 
     probe = reflection("Reply with the single word ready.")
     if not probe or not probe[0].strip():
         raise SystemExit("The reflection model returned nothing. Check the API key in .env.")
 
-    for ablation in resolve(args.ablations):
-        for seed in args.seeds:
-            if len(args.seeds) > 1:
-                train, val, test = split(examples, sizes=tuple(args.split), seed=seed)
-            print(f"[run] {ablation.name} seed={seed}")
-            summary = run_one(ablation, seed, args, train, val, test, reflection)
-            print(f"[done] {ablation.name} seed={seed} test={summary['test_score']:.3f} "
-                  f"best_val={summary['best_valset_score']:.3f} calls_to_best={summary['metric_calls_to_best']}")
+    try:
+        for ablation in resolve(args.ablations):
+            for seed in args.seeds:
+                if len(args.seeds) > 1:
+                    train, val, test = split(examples, sizes=tuple(args.split), seed=seed)
+                print(f"[run] {ablation.name} seed={seed}")
+                summary = run_one(ablation, seed, args, train, val, test, reflection)
+                print(f"[done] {ablation.name} seed={seed} test={summary['test_score']:.3f} "
+                      f"best_val={summary['best_valset_score']:.3f} calls_to_best={summary['metric_calls_to_best']}")
+    finally:
+        if tracing:
+            flush_tracing()
 
 
 if __name__ == "__main__":

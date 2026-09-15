@@ -28,7 +28,12 @@ Homepage = "https://github.com/cmpnd-ai/skilled-proposer"
 Repository = "https://github.com/cmpnd-ai/skilled-proposer"
 
 [tool.uv]
-dev-dependencies = ["pytest>=8.0", "rapidfuzz>=3.0", "python-dotenv>=1.0"]
+dev-dependencies = [
+    "pytest>=8.0",
+    "rapidfuzz>=3.0",
+    "python-dotenv>=1.0",
+    "cmpnd>=0.25.1",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -104,3 +104,22 @@ def test_run_dry_run_makes_no_lm_calls(capsys):
     out = capsys.readouterr().out
     assert "556 train / 200 val / 200 test" in out
     assert "metric self-check passed" in out
+
+
+def test_tracing_off_without_key(monkeypatch, capsys):
+    from benchmarks.committee.run import configure_tracing
+    monkeypatch.delenv("CMPND_API_KEY", raising=False)
+    assert configure_tracing() is False
+    assert "tracing is off" in capsys.readouterr().out
+
+
+def test_tracing_on_with_key(monkeypatch, capsys):
+    import cmpnd
+    from benchmarks.committee import run
+    calls = []
+    monkeypatch.setenv("CMPND_API_KEY", "test-key")
+    monkeypatch.setattr(cmpnd, "configure", lambda **kw: calls.append(("configure", kw)))
+    monkeypatch.setattr(cmpnd, "auto_instrument", lambda: calls.append(("auto_instrument", {})))
+    assert run.configure_tracing() is True
+    assert calls == [("configure", {"project_tags": run.TRACE_TAGS}), ("auto_instrument", {})]
+    assert "tracing on" in capsys.readouterr().out

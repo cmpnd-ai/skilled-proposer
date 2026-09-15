@@ -162,7 +162,7 @@ optimizer = dspy.GEPA(
 
 `benchmarks/committee/` runs GEPA on one task, extracting the sponsoring committee from a political fundraising email, under named configurations and records how each run progresses. The data and metric come from Derek Willis's political-fundraising-emails project under the MIT license. See `benchmarks/committee/ATTRIBUTION.md`.
 
-The student is a small model served by LM Studio. The reflection model is read from the environment. Put keys in a `.env` file in the repo root.
+The student is a small model served by LM Studio. The reflection model is read from the environment. Put keys in a `.env` file in the repo root. When `CMPND_API_KEY` is set, the runner traces every model call and GEPA run to cmpnd under the tags `skilled-proposer` and `committee-benchmark`.
 
 ```bash
 uv run python -m benchmarks.committee.run --dry-run
