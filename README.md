@@ -140,7 +140,7 @@ proposer = SkilledProposer(
 
 These are GEPA engine settings, passed through `gepa_kwargs`, that pair well with this proposer:
 
-- A larger `reflection_minibatch_size` gives the reflection model more failures to diagnose per call.
+- A larger `reflection_minibatch_size` gives the reflection model more failures to diagnose per call. DSPy's default is 3. Use 10 to 20 so each proposal sees enough of the task's variety.
 - `acceptance_criterion=ImprovementOrEqualAcceptance()` from `gepa.strategies.acceptance` lets a proposal that ties its parent on the minibatch through to the valset, which helps when the minibatch is small.
 - `candidate_selection_strategy="epsilon_greedy"` on `dspy.GEPA` explores parents off the Pareto front some of the time.
 
@@ -151,7 +151,7 @@ optimizer = dspy.GEPA(
     metric=metric,
     reflection_lm=dspy.LM("openai/gpt-5.6-luna"),
     instruction_proposer=proposer,
-    reflection_minibatch_size=5,
+    reflection_minibatch_size=15,
     candidate_selection_strategy="epsilon_greedy",
     gepa_kwargs=proposer.gepa_kwargs(acceptance_criterion=ImprovementOrEqualAcceptance()),
     auto="medium",

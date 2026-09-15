@@ -38,7 +38,7 @@ def parse_args(argv=None):
     p.add_argument("--seeds", nargs="+", type=int, default=[13])
     p.add_argument("--max-metric-calls", type=int, default=1500)
     p.add_argument("--split", nargs=3, type=int, default=[556, 200, 200], metavar=("TRAIN", "VAL", "TEST"))
-    p.add_argument("--reflection-minibatch-size", type=int, default=3)
+    p.add_argument("--reflection-minibatch-size", type=int, default=15)
     p.add_argument("--num-threads", type=int, default=4)
     p.add_argument("--student-model", default=os.environ.get("STUDENT_MODEL", DEFAULT_STUDENT_MODEL))
     p.add_argument("--student-api-base", default=os.environ.get("STUDENT_API_BASE", DEFAULT_STUDENT_API_BASE))
