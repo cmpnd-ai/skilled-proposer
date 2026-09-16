@@ -75,7 +75,13 @@ from skilled_proposer import SkilledProposer
 
 
 def test_ablation_registry_names():
-    assert list(ABLATIONS) == ["stock", "baseline", "journal", "dedupe", "journal+dedupe"]
+    assert list(ABLATIONS) == [
+        "stock", "baseline", "journal", "dedupe", "journal+dedupe", "baseline-long", "baseline-short",
+    ]
+    long = ABLATIONS["baseline-long"]()
+    short = ABLATIONS["baseline-short"]()
+    assert "500 words" in long.proposer_kwargs["additional_instructions"]
+    assert short.proposer_kwargs == {"max_words": 150}
     assert [a.name for a in resolve(["all"])] == list(ABLATIONS)
     assert [a.name for a in resolve(["journal", "stock"])] == ["journal", "stock"]
 

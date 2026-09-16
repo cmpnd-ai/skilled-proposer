@@ -41,6 +41,13 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "journal": lambda: Ablation("journal", {"journal": True}),
     "dedupe": lambda: Ablation("dedupe", {"dedupe": True}),
     "journal+dedupe": lambda: Ablation("journal+dedupe", {"journal": True, "dedupe": True}),
+    "baseline-long": lambda: Ablation("baseline-long", {
+        "additional_instructions": (
+            "Write a thorough instruction of roughly 500 words. Cover the decision "
+            "rules, the output format, and the edge cases the examples reveal."
+        ),
+    }),
+    "baseline-short": lambda: Ablation("baseline-short", {"max_words": 150}),
 }
 
 
