@@ -4,26 +4,47 @@ from __future__ import annotations
 
 import csv
 import random
+import re
+import unicodedata
 from pathlib import Path
 
 import dspy
 
 DATA_PATH = Path(__file__).with_name("training.csv")
 
+_WHITESPACE_RUN = re.compile(r"[ \t]{2,}")
+
+
+def clean_body(text: str) -> str:
+    """Remove invisible padding characters that email preheaders use.
+
+    Marketing emails pad the preview text with hundreds of combining
+    joiners and zero width characters. They carry no content, they
+    inflate the prompt, and a long run of them crashed the local student
+    model. Format characters and the combining grapheme joiner are
+    dropped, then repeated spaces are collapsed.
+    """
+    kept = []
+    for ch in text:
+        if ch == "͏" or unicodedata.category(ch) == "Cf":
+            continue
+        kept.append(ch)
+    return _WHITESPACE_RUN.sub(" ", "".join(kept)).strip()
+
 
 def load_rows(path: str | Path = DATA_PATH) -> list[dict]:
-    """Drop rows with a repeated body so one email cannot appear in two splits."""
+    """Clean each body and drop repeats so one email cannot appear in two splits."""
     seen_bodies: set[str] = set()
     rows = []
     with open(path, newline="") as f:
         for r in csv.DictReader(f):
-            if not (r.get("committee", "").strip() and r.get("body", "").strip()):
+            body = clean_body(r.get("body", ""))
+            if not (r.get("committee", "").strip() and body):
                 continue
-            body = r["body"].strip()
             if body in seen_bodies:
                 continue
             seen_bodies.add(body)
-            rows.append(r)
+            rows.append({**r, "body": body})
     return rows
 
 

@@ -16,6 +16,21 @@ def test_data_loads_and_splits_without_overlap():
     assert set(train[0].inputs().keys()) == {"email_body"}
 
 
+def test_clean_body_strips_invisible_padding():
+    from benchmarks.committee.data import clean_body
+    padded = "Let’s finish what we started ͏ ͏ ͏ ͏​‌⁠ Paid for by Kean for Congress Inc"
+    assert clean_body(padded) == "Let’s finish what we started Paid for by Kean for Congress Inc"
+    assert clean_body("  plain   text \n next ") == "plain text \n next"
+
+
+def test_loaded_bodies_have_no_invisible_padding():
+    rows = load_rows(DATA_PATH)
+    assert all("͏" not in r["body"] and "​" not in r["body"] for r in rows)
+    target = [r for r in rows if r["body"].startswith("Let’s finish what we started")]
+    assert len(target) == 1
+    assert len(target[0]["body"]) < 2400
+
+
 def test_load_rows_drops_repeated_bodies():
     rows = load_rows(DATA_PATH)
     bodies = [r["body"].strip() for r in rows]
