@@ -69,7 +69,7 @@ def test_program_shape():
 
 import json
 
-from benchmarks.committee.ablations import ABLATIONS, resolve
+from benchmarks.committee.ablations import ABLATIONS, LONG_GUIDANCE, resolve
 from benchmarks.committee import report
 from skilled_proposer import SkilledProposer
 
@@ -77,8 +77,11 @@ from skilled_proposer import SkilledProposer
 def test_ablation_registry_names():
     assert list(ABLATIONS) == [
         "stock", "baseline", "journal", "dedupe", "journal+dedupe",
-        "baseline-long", "baseline-short", "journal-long",
+        "baseline-long", "baseline-short", "journal-long", "dedupe-long",
     ]
+    dedupe_long = ABLATIONS["dedupe-long"]()
+    assert dedupe_long.proposer_kwargs["dedupe"].threshold == 0.5
+    assert dedupe_long.proposer_kwargs["additional_instructions"] == LONG_GUIDANCE
     long = ABLATIONS["baseline-long"]()
     short = ABLATIONS["baseline-short"]()
     journal_long = ABLATIONS["journal-long"]()

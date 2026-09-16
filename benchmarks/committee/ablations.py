@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from skilled_proposer import SkilledProposer
+from skilled_proposer import DedupeConfig, SkilledProposer
 
 SKILLS = [str(Path(__file__).resolve().parents[2] / "skills" / "prompt-engineering")]
 
@@ -49,6 +49,10 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "baseline-long": lambda: Ablation("baseline-long", {"additional_instructions": LONG_GUIDANCE}),
     "baseline-short": lambda: Ablation("baseline-short", {"max_words": 150}),
     "journal-long": lambda: Ablation("journal-long", {"journal": True, "additional_instructions": LONG_GUIDANCE}),
+    "dedupe-long": lambda: Ablation("dedupe-long", {
+        "dedupe": DedupeConfig(threshold=0.5),
+        "additional_instructions": LONG_GUIDANCE,
+    }),
 }
 
 
