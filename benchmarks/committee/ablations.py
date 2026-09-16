@@ -35,19 +35,20 @@ class Ablation:
         return proposer.gepa_kwargs(callbacks=list(extra_callbacks), **self.engine_kwargs)
 
 
+LONG_GUIDANCE = (
+    "Write a thorough instruction of roughly 500 words. Cover the decision "
+    "rules, the output format, and the edge cases the examples reveal."
+)
+
 ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "stock": lambda: Ablation("stock", None),
     "baseline": lambda: Ablation("baseline", {}),
     "journal": lambda: Ablation("journal", {"journal": True}),
     "dedupe": lambda: Ablation("dedupe", {"dedupe": True}),
     "journal+dedupe": lambda: Ablation("journal+dedupe", {"journal": True, "dedupe": True}),
-    "baseline-long": lambda: Ablation("baseline-long", {
-        "additional_instructions": (
-            "Write a thorough instruction of roughly 500 words. Cover the decision "
-            "rules, the output format, and the edge cases the examples reveal."
-        ),
-    }),
+    "baseline-long": lambda: Ablation("baseline-long", {"additional_instructions": LONG_GUIDANCE}),
     "baseline-short": lambda: Ablation("baseline-short", {"max_words": 150}),
+    "journal-long": lambda: Ablation("journal-long", {"journal": True, "additional_instructions": LONG_GUIDANCE}),
 }
 
 
