@@ -113,6 +113,29 @@ def test_report_table_and_curves(tmp_path):
     assert len(lines) == 3
 
 
+def test_report_backfills_instruction_words_from_program(tmp_path):
+    d = tmp_path / "stock" / "13"
+    d.mkdir(parents=True)
+    (d / "summary.json").write_text(json.dumps({"ablation": "stock", "seed": 13, "test_score": 0.5}))
+    (d / "program.json").write_text(json.dumps({
+        "extract": {"signature": {"instructions": "one two three four five"}},
+        "metadata": {"dependency_versions": {}},
+    }))
+    summaries = report.load_summaries(tmp_path)
+    assert summaries[0]["best_instruction_words"] == 5
+    assert report.saved_instruction_words(tmp_path / "missing.json") is None
+    table = report.build_table(summaries)
+    assert "words" in table.splitlines()[0]
+    assert table.splitlines()[1].split()[-1] == "5"
+
+
+def test_instruction_words_counts_predictor_instructions():
+    from benchmarks.committee.run import instruction_words
+    program = build_program()
+    program.extract.signature = program.extract.signature.with_instructions("Return only the committee name.")
+    assert instruction_words(program) == 5
+
+
 def test_run_dry_run_makes_no_lm_calls(capsys):
     from benchmarks.committee.run import main
     main(["--dry-run"])

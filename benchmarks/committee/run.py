@@ -57,6 +57,11 @@ def selftest_metric() -> None:
             raise SystemExit(f"metric self-check failed for {gold!r} vs {pred!r}: {out.score}")
 
 
+def instruction_words(program) -> int:
+    """Word count of the instructions across the program's predictors."""
+    return sum(len(pred.signature.instructions.split()) for _, pred in program.named_predictors())
+
+
 def evaluate(program, examples, num_threads: int) -> float:
     result = dspy.Evaluate(devset=examples, metric=committee_metric, num_threads=num_threads,
                            display_progress=False)(program)
@@ -95,6 +100,7 @@ def run_one(ablation: Ablation, seed: int, args, train, val, test, reflection_lm
         "reflection_model": args.reflection_model,
         "max_metric_calls": args.max_metric_calls,
         "test_score": evaluate(optimized, test, args.num_threads),
+        "best_instruction_words": instruction_words(optimized),
         "wall_seconds": round(wall, 1),
         **recorder.summary(),
         **stats,

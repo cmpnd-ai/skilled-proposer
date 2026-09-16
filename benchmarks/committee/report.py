@@ -20,19 +20,44 @@ COLUMNS = [
     ("reflection_calls", "reflect calls"),
     ("duplicates", "dups"),
     ("auc_valset_vs_calls", "auc"),
+    ("best_instruction_words", "words"),
 ]
 
 
+def saved_instruction_words(program_path: Path) -> int | None:
+    """Word count of the instructions in a saved program file, or None when absent."""
+    if not program_path.exists():
+        return None
+    program = json.loads(program_path.read_text())
+    total = 0
+    found = False
+    for value in program.values():
+        if isinstance(value, dict) and isinstance(value.get("signature"), dict):
+            total += len(value["signature"].get("instructions", "").split())
+            found = True
+    return total if found else None
+
+
 def load_summaries(root: str | Path) -> list[dict]:
-    return [json.loads(p.read_text()) for p in sorted(Path(root).glob("*/*/summary.json"))]
+    """Read every summary, filling the instruction word count from the saved program when missing."""
+    summaries = []
+    for p in sorted(Path(root).glob("*/*/summary.json")):
+        summary = json.loads(p.read_text())
+        if "best_instruction_words" not in summary:
+            summary["best_instruction_words"] = saved_instruction_words(p.with_name("program.json"))
+        summaries.append(summary)
+    return summaries
 
 
 def _cell(values: list[float]) -> str:
     values = [v for v in values if v is not None]
     if not values:
         return "-"
+    whole = all(isinstance(v, int) for v in values)
     if len(values) == 1:
-        return f"{values[0]:.3f}"
+        return f"{values[0]:d}" if whole else f"{values[0]:.3f}"
+    if whole:
+        return f"{fmean(values):.0f} ± {pstdev(values):.0f}"
     return f"{fmean(values):.3f} ± {pstdev(values):.3f}"
 
 
