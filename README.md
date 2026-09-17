@@ -8,10 +8,10 @@ GEPA improves a program by asking a reflection model to rewrite each component's
 
 `SkilledProposer` uses a different meta-prompt. It gives the reflection model a three-step procedure. First, infer the task from the examples, because the assistant will only ever see the instruction. Second, diagnose why each failure happened and find the general rule that would have prevented it. Third, write the replacement instruction from those rules. The prompt then states one principle against overfitting. The proposer also adds four practical controls:
 
-- Skills. Pass SKILL.md files, skill directories, or inline strings. The reflection model gets them as reference material, e.g., a prompting guide for your student model.
-- Extra guidance. A plain string applied to every proposal.
-- Length budgets. Cap the proposed instruction by words or tokens. The cap is enforced by a prompt constraint, then a compression pass, then truncation.
-- A proposal journal. The reflection model sees what it proposed earlier in the run, which of those proposals GEPA kept, and lessons distilled from that record.
+- **Skills:** Pass SKILL.md files, skill directories, or inline strings. The reflection model gets them as reference material, e.g., a prompting guide for your student model.
+- **Extra guidance:** A plain string applied to every proposal.
+- **Length budgets:** Cap the proposed instruction by words or tokens. The cap is enforced by a prompt constraint, then a compression pass, then truncation.
+- **A proposal journal:** The reflection model sees what it proposed earlier in the run, which of those proposals GEPA kept, and lessons distilled from that record.
 
 ## Install
 
@@ -19,7 +19,7 @@ GEPA improves a program by asking a reflection model to rewrite each component's
 pip install skilled-proposer
 ```
 
-Requires Python 3.10 or newer and dspy 3.3.1 or newer.
+Requires Python 3.10 or newer and DSPy 3.3.1 or newer.
 
 ## Quickstart
 
@@ -118,13 +118,9 @@ Size: 231 words, 48 more than the parent.
 Reason: Chosen as the parent in iteration 5.
 ```
 
-The verdict comes from lineage, so the journal needs nothing from GEPA. When GEPA later hands a proposal back as the parent to improve, that proposal was accepted, and the entry says so. A proposal that never comes back is shown as not chosen as a parent so far. There is no callback to register and no engine setting to pass.
-
 Every `distill_every` closed entries, the proposer asks the reflection model to condense the whole journal into a short list of lessons about which kinds of changes this task rewards. The lessons lead every later prompt, above the entries. A failed distillation keeps the prior lessons. Set `distill_every=None` to turn distillation off.
 
 Set `journal_path` to keep the journal in a JSON file. The proposer writes it after every proposal and loads it when the file exists, so a run resumed from GEPA's `log_dir` keeps its record. The file is also the easiest way to read what the reflection model tried and what it learned.
-
-The journal costs one extra reflection call per distillation and adds the rendered entries to each proposal prompt. In the benchmark below, on a small local student model, turning it on raised the mean test score from 0.883 to 0.910 over three seeds and cut the spread between seeds from 0.040 to 0.008. Paired with a request for longer instructions through `additional_instructions`, it reached 0.931.
 
 The journal is text only. It reads the instruction text GEPA hands back, so it works with any GEPA sampling strategy and with the standalone `gepa` package.
 
@@ -150,32 +146,6 @@ optimizer = dspy.GEPA(
 )
 ```
 
-## Benchmarks
-
-`benchmarks/committee/` runs GEPA on one task, extracting the sponsoring committee from a political fundraising email, under named configurations and records how each run progresses. The data and metric come from Derek Willis's political-fundraising-emails project under the MIT license. See `benchmarks/committee/ATTRIBUTION.md`.
-
-The student is a small model served by LM Studio. The reflection model is read from the environment. Put keys in a `.env` file in the repo root. When `CMPND_API_KEY` is set, the runner traces every model call and GEPA run to cmpnd under the tags `skilled-proposer` and `committee-benchmark`.
-
-```bash
-uv run python -m benchmarks.committee.run --dry-run
-uv run python -m benchmarks.committee.run --ablations all --max-metric-calls 1500
-uv run python -m benchmarks.committee.report
-```
-
-Each run writes a trajectory, a summary, the optimized program, and the journal when there is one, under `benchmarks/results/`. The report prints one row per configuration with the test score of the best program, the best valset score, metric calls to reach it, accept rate, reflection calls, and the word count of the best instruction, and writes the curves to a CSV.
-
-Results from one run of the harness, with `lfm2.5-1.2b-instruct-mlx` as the student, `openai/gpt-5.6-luna` as the reflection model, a 15-example reflection minibatch, 1500 metric calls, and three seeds. The test score is the best program scored on 200 held-out emails.
-
-| Configuration | Test score | Words in best instruction |
-|---|---|---|
-| DSPy's built-in proposer | 0.894 ± 0.007 | 558 |
-| SkilledProposer | 0.883 ± 0.040 | 200 |
-| SkilledProposer, journal | 0.910 ± 0.008 | 212 |
-| SkilledProposer, long guidance | 0.931 ± 0.026 | 487 |
-| SkilledProposer, journal and long guidance | 0.931 ± 0.018 | 498 |
-
-Long guidance means `additional_instructions="Write a thorough instruction of roughly 500 words. Cover the decision rules, the output format, and the edge cases the examples reveal."` A cap of 150 words scored 0.859. On this task the reflection model does better when asked for a fuller instruction, and the journal makes the result more consistent across seeds.
-
 ## Using the standalone gepa package
 
 `dspy.GEPA` runs the proposer inside the reflection model's context, so you do not pass a model. The standalone [gepa](https://github.com/gepa-ai/gepa) package does not set a DSPy context, so pass the model yourself:
@@ -198,7 +168,7 @@ dspy 3.3 added [`dspy.Flex`](https://dspy.ai/diving-deeper/flex/), a module that
 
 `SkilledCodeProposer` applies this package's approach to Flex source. The reflection model gets the same three step procedure, a rule against overfitting written for code, your reference skills, and your extra guidance. Every proposal is checked before it is used. It must parse and define a class with a `forward` method, or the current source is kept.
 
-dspy has no `code_proposer` hook yet, so this package patches the built-in proposer for the duration of a `compile` call:
+dspy has no `code_proposer` hook yet (coming soon!), so this package patches the built-in proposer for the duration of a `compile` call:
 
 ```python
 import dspy
@@ -222,7 +192,6 @@ with use_code_proposer(code_proposer):
 
 Notes:
 
-- This feature requires dspy 3.3 or newer, which the package already requires.
 - dspy logs a warning that a custom `instruction_proposer` skips code components. Under the patch the warning is expected and harmless, because the patched proposer handles them.
 - The patch is a bridge. We are proposing a `code_proposer` parameter for `dspy.GEPA`; once it lands, pass `SkilledCodeProposer` there and drop the patch.
 - `SkilledCodeProposer` takes `skills`, `additional_instructions`, `base_instructions`, `prompt_model`, `max_examples`, `retries`, and `on_error`, with the same meanings as `SkilledProposer`. A proposal that does not parse, defines no class, or has no `forward` method counts as a failure. There is no length budget for code.
