@@ -10,7 +10,6 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from statistics import fmean
 from typing import Any, Mapping, Sequence
 
 import dspy
@@ -104,16 +103,11 @@ class SkilledProposer:
             alias for "skip". "raise" propagates the first error with no
             retries, so failures surface during development. Either way,
             an LM/provider error (LMError) always propagates.
-        journal: Experimental. Record every proposal and what GEPA did with
-            it, and show that record to the reflection model on each call.
-            With no extra setup, the journal learns a proposal's fate from
-            lineage: a proposal that GEPA later hands back as a parent was
-            accepted. Registering the proposer's callbacks with
-            ``dspy.GEPA(gepa_kwargs=proposer.gepa_kwargs())`` adds
-            rejections, minibatch scores, and valset scores to the record.
-            With callbacks, the journal pairs a verdict to a proposal by
-            position within the iteration, which assumes one proposal per
-            iteration, GEPA's default sampling.
+        journal: Experimental. Record every proposal, the reflection model's
+            summary of what it changed, and whether GEPA later chose it as a
+            parent, and show that record to the reflection model on each
+            call. A proposal that GEPA hands back as the parent to improve
+            was accepted; one that never comes back is shown as not chosen.
         journal_path: Optional JSON file for the journal. Loaded when it
             exists and written after every iteration, so a resumed run keeps
             its record. Requires journal=True.
@@ -170,18 +164,8 @@ class SkilledProposer:
         self.distill_every = distill_every if journal else None
         self.journal = Journal.load(self.journal_path) if self.journal_path else Journal()
 
-        # Callback bookkeeping for the current iteration. Without callbacks the
-        # proposer counts its own calls as iterations and infers verdicts from
-        # which proposals come back as parents.
+        # Each proposal call counts as one journal iteration.
         self._iteration = 0
-        self._callbacks_seen = False
-        self._logged_lineage_mode = False
-        self._pending_parents: list[tuple[int, dict[str, str]]] = []
-        self._calls_this_iteration = 0
-        # The reflection LM is ambient only during the proposal call (dspy.GEPA
-        # wraps that call in dspy.context(lm=reflection_lm)), so it is captured
-        # here for distillation, which runs later from a callback.
-        self._reflection_lm: "dspy.LM | None" = None
 
         # All LM-facing predictors live on a dspy.Module.
         self.module = InstructionProposalModule(
@@ -197,11 +181,9 @@ class SkilledProposer:
         components_to_update: list[str],
         **kwargs: Any,
     ) -> dict[str, str]:
-        if self.prompt_model is None:
-            self._reflection_lm = getattr(dspy.settings, "lm", None)
-        parent_idx = self._begin_call(candidate)
-        task = self._calls_this_iteration
-        self._calls_this_iteration += 1
+        self._iteration += 1
+        if self.journal_enabled:
+            self._advance_journal(candidate)
 
         results: dict[str, str] = {}
         for name in components_to_update:
@@ -223,107 +205,26 @@ class SkilledProposer:
                 self.journal.open(
                     JournalEntry(
                         iteration=self._iteration,
-                        task=task,
                         component=name,
-                        parent_idx=parent_idx,
                         parent_text=current,
                         proposed_text=proposal.text,
                         change_summary=proposal.change_summary,
                     )
                 )
-        if self.journal_enabled and not self._callbacks_seen:
+        if self.journal_enabled:
             self._save_journal()
         return results
 
-    def _begin_call(self, candidate: Mapping[str, str]) -> int | None:
-        """Pick the parent for this call. Without callbacks, count the call as
-        an iteration and learn verdicts from lineage."""
-        if not self._callbacks_seen:
-            self._iteration += 1
-            self._calls_this_iteration = 0
-            if self.journal_enabled:
-                self._advance_lineage(candidate)
-        if self._pending_parents:
-            parent_idx, _ = self._pending_parents.pop(0)
-            return parent_idx
-        return None
+    # -- Journal ------------------------------------------------------------
 
-    def _advance_lineage(self, candidate: Mapping[str, str]) -> None:
+    def _advance_journal(self, candidate: Mapping[str, str]) -> None:
         """Mark proposals that came back as parents accepted, close the
-        previous iteration, and distill when due."""
-        if not self._logged_lineage_mode:
-            self._logged_lineage_mode = True
-            self.journal.source = "lineage"
-            logger.info(
-                "SkilledProposer journal is inferring verdicts from lineage. "
-                "Register callbacks with gepa_kwargs=proposer.gepa_kwargs() "
-                "to record rejections and scores as well."
-            )
+        previous iteration's entries, and distill when due."""
         for e in self.journal.entries:
             if e.accepted is None and candidate.get(e.component) == e.proposed_text:
                 e.accepted = True
                 e.reason = f"Chosen as the parent in iteration {self._iteration}."
         self.journal.close(self._iteration - 1)
-        if self.distill_every and self.journal.closed_since_distill >= self.distill_every:
-            self._distill()
-
-    def gepa_kwargs(self, **overrides: Any) -> dict[str, Any]:
-        """Keyword arguments for dspy.GEPA(gepa_kwargs=...) that register this
-        proposer as a callback. Extra keywords pass through."""
-        callbacks = [self, *overrides.pop("callbacks", [])]
-        return {"callbacks": callbacks, **overrides}
-
-    # -- GEPACallback -------------------------------------------------------
-
-    def on_candidate_selected(self, event: Mapping[str, Any]) -> None:
-        self._callbacks_seen = True
-        iteration = event["iteration"]
-        if iteration != self._iteration:
-            self._iteration = iteration
-            self._pending_parents = []
-            self._calls_this_iteration = 0
-        self._pending_parents.append((event["candidate_idx"], dict(event["candidate"])))
-
-    def on_valset_evaluated(self, event: Mapping[str, Any]) -> None:
-        # GEPA rejects before it evaluates on the valset, so a task with a
-        # verdict already is never the one being evaluated here.
-        iteration = event["iteration"]
-        for task in self.journal.open_tasks(iteration):
-            entries = self.journal.entries_for_task(iteration, task)
-            if all(e.accepted is None and e.valset_average is None for e in entries):
-                for e in entries:
-                    e.valset_average = event["average_score"]
-                return
-
-    def on_candidate_accepted(self, event: Mapping[str, Any]) -> None:
-        self._attach_verdict(event["iteration"], accepted=True, reason="")
-
-    def on_candidate_rejected(self, event: Mapping[str, Any]) -> None:
-        self._attach_verdict(event["iteration"], accepted=False, reason=event.get("reason", ""))
-
-    def _attach_verdict(self, iteration: int, *, accepted: bool, reason: str) -> None:
-        open_tasks = [
-            (task, self.journal.entries_for_task(iteration, task))
-            for task in self.journal.open_tasks(iteration)
-        ]
-        unverdicted = [(t, es) for t, es in open_tasks if all(e.accepted is None for e in es)]
-        if accepted:
-            # An accepted task already carries its valset score.
-            with_valset = [(t, es) for t, es in unverdicted if es[0].valset_average is not None]
-            unverdicted = with_valset or unverdicted
-        if not unverdicted:
-            return
-        _, entries = unverdicted[0]
-        for e in entries:
-            e.accepted = accepted
-            e.reason = reason
-
-    def on_iteration_end(self, event: Mapping[str, Any]) -> None:
-        iteration = event["iteration"]
-        state = event["state"]
-        self._attach_minibatch_scores(iteration, state)
-        self.journal.close(iteration)
-        self._save_journal()
         if self.distill_every and self.journal.closed_since_distill >= self.distill_every:
             self._distill()
 
@@ -336,35 +237,20 @@ class SkilledProposer:
         except Exception:
             logger.warning("Failed to save the journal to %s.", self.journal_path, exc_info=True)
 
-    def _attach_minibatch_scores(self, iteration: int, state: Any) -> None:
-        trace = state.full_program_trace[-1] if getattr(state, "full_program_trace", None) else {}
-        evaluated = [t for t in trace.get("tasks", []) if "new_subsample_scores" in t]
-        for task, record in zip(self.journal.open_tasks(iteration), evaluated):
-            before = record.get("subsample_scores") or []
-            after = record.get("new_subsample_scores") or []
-            for e in self.journal.entries_for_task(iteration, task):
-                e.minibatch_before = fmean(before) if before else None
-                e.minibatch_after = fmean(after) if after else None
-
     def _distill(self) -> None:
         """Refresh the lessons from the whole journal. Never raises into GEPA."""
         try:
-            kwargs = dict(
+            pred = self._run(
+                self.module.distill,
                 journal=self.journal.render(limit=None),
                 prior_lessons=self.journal.lessons.strip() or "None",
             )
-            if self.prompt_model is None and self._reflection_lm is not None:
-                with dspy.context(lm=self._reflection_lm):
-                    pred = self.module.distill(**kwargs)
-            else:
-                pred = self._run(self.module.distill, **kwargs)
             lessons = (pred.lessons or "").strip()
             if lessons:
                 self.journal.lessons = lessons
         except Exception:
             logger.warning("Lesson distillation failed; keeping the prior lessons.", exc_info=True)
         self.journal.closed_since_distill = 0
-        self._save_journal()
 
     # -- Internals ----------------------------------------------------------
 

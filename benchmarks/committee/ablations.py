@@ -16,7 +16,6 @@ class Ablation:
     name: str
     proposer_kwargs: dict[str, Any] | None
     engine_kwargs: dict[str, Any] = field(default_factory=dict)
-    register_callbacks: bool = True
 
     @property
     def uses_stock_proposer(self) -> bool:
@@ -30,10 +29,8 @@ class Ablation:
             kwargs["journal_path"] = run_dir / "journal.json"
         return SkilledProposer(skills=SKILLS, **kwargs)
 
-    def gepa_kwargs(self, proposer: SkilledProposer | None, extra_callbacks: list[Any]) -> dict[str, Any]:
-        if proposer is None or not self.register_callbacks:
-            return {"callbacks": list(extra_callbacks), **self.engine_kwargs}
-        return proposer.gepa_kwargs(callbacks=list(extra_callbacks), **self.engine_kwargs)
+    def gepa_kwargs(self, extra_callbacks: list[Any]) -> dict[str, Any]:
+        return {"callbacks": list(extra_callbacks), **self.engine_kwargs}
 
 
 LONG_GUIDANCE = (
@@ -48,10 +45,6 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "baseline-long": lambda: Ablation("baseline-long", {"additional_instructions": LONG_GUIDANCE}),
     "baseline-short": lambda: Ablation("baseline-short", {"max_words": 150}),
     "journal-long": lambda: Ablation("journal-long", {"journal": True, "additional_instructions": LONG_GUIDANCE}),
-    "journal-nocb": lambda: Ablation("journal-nocb", {"journal": True}, register_callbacks=False),
-    "journal-long-nocb": lambda: Ablation(
-        "journal-long-nocb", {"journal": True, "additional_instructions": LONG_GUIDANCE}, register_callbacks=False
-    ),
 }
 
 

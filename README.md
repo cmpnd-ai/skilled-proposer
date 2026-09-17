@@ -39,14 +39,11 @@ optimizer = dspy.GEPA(
     metric=metric,
     reflection_lm=dspy.LM("openai/gpt-5.6-luna"),
     instruction_proposer=proposer,
-    gepa_kwargs=proposer.gepa_kwargs(),
     auto="medium",
 )
 
 optimized = optimizer.compile(program, trainset=train, valset=val)
 ```
-
-`gepa_kwargs=proposer.gepa_kwargs()` is optional. It registers the proposer's callbacks with GEPA, which lets the journal below record rejections and scores as well as acceptances.
 
 ## Skills
 
@@ -107,7 +104,7 @@ Every `distill_every` closed entries, the proposer asks the reflection model to 
 
 Set `journal_path` to keep the journal in a JSON file. The proposer writes it after every iteration and loads it when the file exists, so a run resumed from GEPA's `log_dir` keeps its record. The file is also the easiest way to read what the reflection model tried.
 
-The journal works with no extra setup. It learns a proposal's fate from lineage: when GEPA later hands a proposal back as the parent to improve, that proposal was accepted, and the entry says so. A proposal that never comes back is shown as not chosen. Passing `gepa_kwargs=proposer.gepa_kwargs()` to `dspy.GEPA` registers the proposer's callbacks, which adds rejections, the minibatch scores before and after, and the valset score to each entry. With callbacks, the journal pairs a verdict to a proposal by position within the iteration, which assumes one proposal per iteration, GEPA's default sampling.
+The journal needs no setup beyond `journal=True`. It learns a proposal's fate from lineage: when GEPA later hands a proposal back as the parent to improve, that proposal was accepted, and the entry says so. A proposal that never comes back is shown as not chosen.
 
 ## Recommended engine settings
 
@@ -126,7 +123,7 @@ optimizer = dspy.GEPA(
     instruction_proposer=proposer,
     reflection_minibatch_size=15,
     candidate_selection_strategy="epsilon_greedy",
-    gepa_kwargs=proposer.gepa_kwargs(acceptance_criterion=ImprovementOrEqualAcceptance()),
+    gepa_kwargs={"acceptance_criterion": ImprovementOrEqualAcceptance()},
     auto="medium",
 )
 ```

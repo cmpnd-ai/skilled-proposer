@@ -76,12 +76,8 @@ from skilled_proposer import SkilledProposer
 
 def test_ablation_registry_names():
     assert list(ABLATIONS) == [
-        "stock", "baseline", "journal", "baseline-long", "baseline-short",
-        "journal-long", "journal-nocb", "journal-long-nocb",
+        "stock", "baseline", "journal", "baseline-long", "baseline-short", "journal-long",
     ]
-    nocb = ABLATIONS["journal-long-nocb"]()
-    assert nocb.register_callbacks is False
-    assert nocb.proposer_kwargs == {"journal": True, "additional_instructions": LONG_GUIDANCE}
     long = ABLATIONS["baseline-long"]()
     short = ABLATIONS["baseline-short"]()
     journal_long = ABLATIONS["journal-long"]()
@@ -101,11 +97,8 @@ def test_ablation_builds_proposer_or_none(tmp_path):
     assert isinstance(proposer, SkilledProposer)
     assert proposer.journal_enabled
     assert proposer.journal_path == tmp_path / "journal.json"
-    kwargs = both.gepa_kwargs(proposer, extra_callbacks=[object()])
-    assert kwargs["callbacks"][0] is proposer and len(kwargs["callbacks"]) == 2
-    nocb = ABLATIONS["journal-nocb"]()
     recorder = object()
-    assert nocb.gepa_kwargs(nocb.build_proposer(tmp_path), extra_callbacks=[recorder])["callbacks"] == [recorder]
+    assert both.gepa_kwargs(extra_callbacks=[recorder]) == {"callbacks": [recorder]}
 
 
 def test_report_table_and_curves(tmp_path):

@@ -83,7 +83,7 @@ def run_one(ablation: Ablation, seed: int, args, train, val, test, reflection_lm
         num_threads=args.num_threads,
         seed=seed,
         track_stats=True,
-        gepa_kwargs=ablation.gepa_kwargs(proposer, extra_callbacks=[recorder]),
+        gepa_kwargs=ablation.gepa_kwargs(extra_callbacks=[recorder]),
     )
     started = time.time()
     optimized = optimizer.compile(build_program(), trainset=train, valset=val)
