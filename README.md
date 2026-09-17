@@ -6,11 +6,12 @@ A custom instruction proposer for [GEPA](https://dspy.ai/api/optimizers/GEPA/), 
 
 GEPA improves a program by asking a reflection model to rewrite each component's instruction based on execution traces and evaluator feedback. The stock proposer tells the reflection model to include "niche and domain specific factual information" from those traces in the new instruction. This helps with some tasks, but it can copy entities, numbers, and answers from your training examples into the prompt, and the prompt might perform worse on inputs it has never seen.
 
-`SkilledProposer` uses a different meta-prompt. It gives the reflection model a three-step procedure. First, infer the task from the examples, because the assistant will only ever see the instruction. Second, diagnose why each failure happened and find the general rule that would have prevented it. Third, write the replacement instruction from those rules. The prompt then states one principle against overfitting. The proposer also adds three practical controls:
+`SkilledProposer` uses a different meta-prompt. It gives the reflection model a three-step procedure. First, infer the task from the examples, because the assistant will only ever see the instruction. Second, diagnose why each failure happened and find the general rule that would have prevented it. Third, write the replacement instruction from those rules. The prompt then states one principle against overfitting. The proposer also adds four practical controls:
 
 - Skills. Pass SKILL.md files, skill directories, or inline strings. The reflection model gets them as reference material, e.g., a prompting guide for your student model.
 - Extra guidance. A plain string applied to every proposal.
 - Length budgets. Cap the proposed instruction by words or tokens. The cap is enforced by a prompt constraint, then a compression pass, then truncation.
+- A proposal journal. The reflection model sees what it proposed earlier in the run, which of those proposals GEPA kept, and lessons distilled from that record.
 
 ## Install
 
@@ -84,7 +85,7 @@ SkilledProposer(
     max_examples=None,             # cap reflective examples per component
     retries=1,                     # extra attempts per component on failure
     on_error="skip",               # "skip" or "raise"
-    journal=False,                 # experimental, see below
+    journal=False,                 # record proposals and their fate, see below
     journal_path=None,             # JSON file for the journal
     journal_entries=12,            # entries shown to the reflection model
     distill_every=5,               # entries between lesson distillations
@@ -96,15 +97,36 @@ SkilledProposer(
 - `on_error="skip"` logs a component whose proposal still fails after retries and leaves it out of the returned dict. GEPA then keeps the parent's text for that component, and when no component survives it skips the proposal without spending minibatch evaluations on a child identical to its parent. `"keep"` is accepted as an alias. Use `on_error="raise"` during development so the first failure surfaces with no retries. Either way, LM/provider errors (`LMError`) always propagate, so a dead API key fails the run instead of silently keeping unchanged text for the whole run.
 - `max_tokens` counts tokens with litellm's tokenizer when it can resolve your model name, and falls back to about 4 characters per token.
 
-## Proposal journal (experimental)
+## Proposal journal
 
-GEPA calls the proposer many times in one run, and each call sees only the current instruction and a fresh set of examples. The reflection model has no memory of what it proposed before or whether GEPA kept it. With `journal=True` the proposer records each proposal, the reflection model's own summary of what it changed, and whether GEPA kept it. Every later call shows the reflection model the newest `journal_entries` entries under a `proposal_journal` field, and the meta-prompt tells it not to repeat an approach the journal shows was rejected.
+GEPA calls the proposer many times in one run, and each call sees only the current instruction and a fresh set of examples. The reflection model has no memory of what it proposed before or whether GEPA kept it, so it can circle back to an approach that already failed or drift away from one that worked. The journal gives it that memory.
 
-Every `distill_every` closed entries, the proposer asks the reflection model to distill the whole journal into a short list of lessons. The lessons appear above the entries on every later call. A failed distillation keeps the prior lessons.
+```python
+proposer = SkilledProposer(
+    skills=["./skills/prompt-engineering"],
+    journal=True,
+    journal_path="runs/committee/journal.json",
+)
+```
 
-Set `journal_path` to keep the journal in a JSON file. The proposer writes it after every iteration and loads it when the file exists, so a run resumed from GEPA's `log_dir` keeps its record. The file is also the easiest way to read what the reflection model tried.
+With `journal=True` the proposer records every proposal it makes: the text, the reflection model's own one or two sentence summary of what it changed, and the size of the change. Every later call shows the reflection model the newest `journal_entries` entries under a `proposal_journal` field. An entry looks like this in the prompt:
 
-The journal needs no setup beyond `journal=True`. It learns a proposal's fate from lineage: when GEPA later hands a proposal back as the parent to improve, that proposal was accepted, and the entry says so. A proposal that never comes back is shown as not chosen.
+```
+### Iteration 4, component `extract`, accepted
+Change: Added a rule to copy the committee name from the disclaimer and stop at the address.
+Size: 231 words, 48 more than the parent.
+Reason: Chosen as the parent in iteration 5.
+```
+
+The verdict comes from lineage, so the journal needs nothing from GEPA. When GEPA later hands a proposal back as the parent to improve, that proposal was accepted, and the entry says so. A proposal that never comes back is shown as not chosen as a parent so far. There is no callback to register and no engine setting to pass.
+
+Every `distill_every` closed entries, the proposer asks the reflection model to condense the whole journal into a short list of lessons about which kinds of changes this task rewards. The lessons lead every later prompt, above the entries. A failed distillation keeps the prior lessons. Set `distill_every=None` to turn distillation off.
+
+Set `journal_path` to keep the journal in a JSON file. The proposer writes it after every proposal and loads it when the file exists, so a run resumed from GEPA's `log_dir` keeps its record. The file is also the easiest way to read what the reflection model tried and what it learned.
+
+The journal costs one extra reflection call per distillation and adds the rendered entries to each proposal prompt. In the benchmark below, on a small local student model, turning it on raised the mean test score from 0.883 to 0.910 over three seeds and cut the spread between seeds from 0.040 to 0.008. Paired with a request for longer instructions through `additional_instructions`, it reached 0.931.
+
+The journal is text only. It reads the instruction text GEPA hands back, so it works with any GEPA sampling strategy and with the standalone `gepa` package.
 
 ## Recommended engine settings
 
@@ -141,6 +163,18 @@ uv run python -m benchmarks.committee.report
 ```
 
 Each run writes a trajectory, a summary, the optimized program, and the journal when there is one, under `benchmarks/results/`. The report prints one row per configuration with the test score of the best program, the best valset score, metric calls to reach it, accept rate, reflection calls, and the word count of the best instruction, and writes the curves to a CSV.
+
+Results from one run of the harness, with `lfm2.5-1.2b-instruct-mlx` as the student, `openai/gpt-5.6-luna` as the reflection model, a 15-example reflection minibatch, 1500 metric calls, and three seeds. The test score is the best program scored on 200 held-out emails.
+
+| Configuration | Test score | Words in best instruction |
+|---|---|---|
+| DSPy's built-in proposer | 0.894 ± 0.007 | 558 |
+| SkilledProposer | 0.883 ± 0.040 | 200 |
+| SkilledProposer, journal | 0.910 ± 0.008 | 212 |
+| SkilledProposer, long guidance | 0.931 ± 0.026 | 487 |
+| SkilledProposer, journal and long guidance | 0.931 ± 0.018 | 498 |
+
+Long guidance means `additional_instructions="Write a thorough instruction of roughly 500 words. Cover the decision rules, the output format, and the edge cases the examples reveal."` A cap of 150 words scored 0.859. On this task the reflection model does better when asked for a fuller instruction, and the journal makes the result more consistent across seeds.
 
 ## Using the standalone gepa package
 
