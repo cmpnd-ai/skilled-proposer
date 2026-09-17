@@ -111,59 +111,14 @@ class DistillLessons(dspy.Signature):
     lessons: str = dspy.OutputField(desc="The updated lessons, one per line.")
 
 
-class DiversifyInstruction(dspy.Signature):
-    """A proposed instruction is too close to earlier attempts that are
-    listed under near duplicates. Write a replacement that takes a
-    materially different approach while still fixing the failures the
-    examples show. Change at least one of: how the task is broken into
-    steps, the decision rules the assistant follows, or the output
-    contract. Do not restate the rejected attempts with new wording.
-
-    ## Generalize — do not overfit
-
-    The instruction will be used on inputs unlike these examples. Every
-    sentence must be equally useful on inputs you have never seen. The
-    specific entities, quantities, dates, and answers in these examples
-    belong to the examples, not the task.
-
-    Reference skills are trusted material the user chose to provide. Draw
-    on them as needed. Follow any additional guidance from the user. Do
-    not exceed the length limit if one is given. Output only the new
-    instruction text, ready to be used verbatim.
-    """
-
-    current_instruction: str = dspy.InputField(
-        desc="The instruction currently given to the assistant."
-    )
-    proposal: str = dspy.InputField(desc="The proposal that was too similar.")
-    near_duplicates: str = dspy.InputField(
-        desc="Earlier attempts the proposal resembles. Take a different approach from all of them."
-    )
-    examples_with_feedback: str = dspy.InputField(
-        desc="Inputs, assistant outputs, and evaluator feedback."
-    )
-    reference_skills: str = dspy.InputField(
-        desc="Reference material (skills) to inform the instruction. May be 'None'."
-    )
-    additional_guidance: str = dspy.InputField(
-        desc="Extra requirements from the user for the new instruction. May be 'None'."
-    )
-    length_limit: str = dspy.InputField(
-        desc="Length limit for the new instruction, or 'None'."
-    )
-    new_instruction: str = dspy.OutputField(
-        desc="A materially different, generalizable instruction. Instruction text only."
-    )
-
-
 def change_summary_field():
     """A fresh output field, because a FieldInfo must not be shared across signatures."""
     return dspy.OutputField(desc="One or two sentences naming what you changed and why.")
 
 
 class InstructionProposalModule(dspy.Module):
-    """dspy.Module housing the proposal, diversify, compression, and
-    distillation predictors.
+    """dspy.Module housing the proposal, compression, and distillation
+    predictors.
 
     Keeping the predictors on a Module makes them discoverable via
     named_predictors(), lets their state be saved/loaded, and routes calls
@@ -173,16 +128,11 @@ class InstructionProposalModule(dspy.Module):
     def __init__(self, base_instructions: str | None = None, with_change_summary: bool = False):
         super().__init__()
         signature = ProposeGeneralizableInstruction
-        diversify_signature = DiversifyInstruction
         if base_instructions:
             signature = signature.with_instructions(base_instructions)
         if with_change_summary:
             signature = signature.append("change_summary", change_summary_field(), str)
-            diversify_signature = diversify_signature.append(
-                "change_summary", change_summary_field(), str
-            )
         self.propose = dspy.Predict(signature)
-        self.diversify = dspy.Predict(diversify_signature)
         self.compress = dspy.Predict(CompressInstruction)
         self.distill = dspy.Predict(DistillLessons)
 

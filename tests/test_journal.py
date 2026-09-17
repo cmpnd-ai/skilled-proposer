@@ -48,19 +48,10 @@ def test_close_marks_entries_and_counts():
     assert j.close(3) == 0
 
 
-def test_rejected_texts_only_closed_rejected_for_component():
-    j = Journal()
-    j.open(entry(iteration=1, component="a", proposed_text="r1", accepted=False))
-    j.open(entry(iteration=1, component="b", proposed_text="r2", accepted=False))
-    j.open(entry(iteration=1, component="a", proposed_text="ok", accepted=True))
-    j.open(entry(iteration=2, component="a", proposed_text="open", accepted=False))
-    j.close(1)
-    assert j.rejected_texts("a") == ["r1"]
-
 
 def test_json_round_trip_keeps_everything():
     j = Journal(lessons="Keep rules short.", closed_since_distill=3)
-    j.open(entry(near_duplicates=["candidate 1"], duplicate_after_retry=True, accepted=False, reason="tie"))
+    j.open(entry(accepted=False, reason="tie"))
     j.close(1)
     text = j.to_json()
     data = json.loads(text)
@@ -68,6 +59,7 @@ def test_json_round_trip_keeps_everything():
     back = Journal.from_json(text)
     assert back.lessons == "Keep rules short."
     assert back.closed_since_distill == 4
+    assert back.source == "callbacks"
     assert back.entries == j.entries
 
 
@@ -123,12 +115,6 @@ def test_render_not_evaluated_entry_has_no_scores():
     assert "Minibatch" not in text
     assert "Size: 2 words, the same as the parent." in text
 
-
-def test_render_duplicate_flags():
-    j = Journal()
-    j.open(entry(near_duplicates=["candidate 1", "rejected entry 2"], duplicate_after_retry=True))
-    text = j.render()
-    assert "Near duplicate of candidate 1, rejected entry 2. Still a near duplicate after a rewrite." in text
 
 
 def test_render_limit_keeps_newest():
@@ -303,15 +289,48 @@ def test_skipped_iteration_leaves_no_entry():
     assert proposer.journal.entries == []
 
 
-def test_unregistered_callbacks_warn_once_and_still_record(caplog):
-    lm = DummyLM([{"new_instruction": "a", "change_summary": "x"}, {"new_instruction": "b", "change_summary": "y"}])
+def test_lineage_infers_acceptance_without_callbacks(caplog):
+    lm = DummyLM([
+        {"new_instruction": "a", "change_summary": "x"},
+        {"new_instruction": "b", "change_summary": "y"},
+        {"new_instruction": "c", "change_summary": "z"},
+    ])
     proposer = SkilledProposer(prompt_model=lm, journal=True, distill_every=None)
     with caplog.at_level("WARNING"):
         proposer(candidate={"p": "seed"}, reflective_dataset={"p": []}, components_to_update=["p"])
-        proposer(candidate={"p": "seed"}, reflective_dataset={"p": []}, components_to_update=["p"])
-    assert sum("gepa_kwargs" in r.message for r in caplog.records) == 1
-    assert [e.iteration for e in proposer.journal.entries] == [1, 2]
-    assert proposer.journal.entries[0].parent_idx is None
+        proposer(candidate={"p": "a"}, reflective_dataset={"p": []}, components_to_update=["p"])
+        proposer(candidate={"p": "a"}, reflective_dataset={"p": []}, components_to_update=["p"])
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+    assert proposer.journal.source == "lineage"
+    first, second, third = proposer.journal.entries
+    assert [e.iteration for e in (first, second, third)] == [1, 2, 3]
+    assert first.parent_idx is None
+    assert first.accepted is True and first.reason == "Chosen as the parent in iteration 2."
+    assert first.closed and second.closed and not third.closed
+    assert second.accepted is None
+    third_prompt = lm.history[2]["messages"][-1]["content"]
+    assert "### Iteration 1, component `p`, accepted" in third_prompt
+    assert "Reason: Chosen as the parent in iteration 2." in third_prompt
+    assert "### Iteration 2, component `p`, not chosen as a parent so far" in third_prompt
+
+
+def test_lineage_distills_and_saves(tmp_path):
+    lm = DummyLM([
+        {"new_instruction": "a", "change_summary": "x"},
+        {"lessons": "Short rules win."},
+        {"new_instruction": "b", "change_summary": "y"},
+    ])
+    path = tmp_path / "j.json"
+    proposer = SkilledProposer(prompt_model=lm, journal=True, journal_path=path, distill_every=1)
+    proposer(candidate={"p": "seed"}, reflective_dataset={"p": []}, components_to_update=["p"])
+    assert Journal.load(path).entries[0].proposed_text == "a"
+    proposer(candidate={"p": "a"}, reflective_dataset={"p": []}, components_to_update=["p"])
+    assert proposer.journal.lessons == "Short rules win."
+    assert proposer.journal.closed_since_distill == 0
+    second_prompt = lm.history[2]["messages"][-1]["content"]
+    assert "## Lessons" in second_prompt
+    saved = Journal.load(path)
+    assert saved.source == "lineage" and saved.lessons == "Short rules win."
 
 
 def test_gepa_kwargs_registers_self():

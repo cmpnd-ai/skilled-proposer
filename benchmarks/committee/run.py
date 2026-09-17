@@ -91,7 +91,6 @@ def run_one(ablation: Ablation, seed: int, args, train, val, test, reflection_lm
     optimized.save(str(run_dir / "program.json"))
     recorder.write_trajectory(run_dir / "trajectory.jsonl")
 
-    stats = proposer.stats if proposer is not None else {"duplicates": 0, "duplicates_after_retry": 0}
     summary = {
         "ablation": ablation.name,
         "seed": seed,
@@ -103,7 +102,6 @@ def run_one(ablation: Ablation, seed: int, args, train, val, test, reflection_lm
         "best_instruction_words": instruction_words(optimized),
         "wall_seconds": round(wall, 1),
         **recorder.summary(),
-        **stats,
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary

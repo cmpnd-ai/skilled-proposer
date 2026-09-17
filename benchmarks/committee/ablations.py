@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from skilled_proposer import DedupeConfig, SkilledProposer
+from skilled_proposer import SkilledProposer
 
 SKILLS = [str(Path(__file__).resolve().parents[2] / "skills" / "prompt-engineering")]
 
@@ -16,6 +16,7 @@ class Ablation:
     name: str
     proposer_kwargs: dict[str, Any] | None
     engine_kwargs: dict[str, Any] = field(default_factory=dict)
+    register_callbacks: bool = True
 
     @property
     def uses_stock_proposer(self) -> bool:
@@ -30,7 +31,7 @@ class Ablation:
         return SkilledProposer(skills=SKILLS, **kwargs)
 
     def gepa_kwargs(self, proposer: SkilledProposer | None, extra_callbacks: list[Any]) -> dict[str, Any]:
-        if proposer is None:
+        if proposer is None or not self.register_callbacks:
             return {"callbacks": list(extra_callbacks), **self.engine_kwargs}
         return proposer.gepa_kwargs(callbacks=list(extra_callbacks), **self.engine_kwargs)
 
@@ -44,15 +45,13 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "stock": lambda: Ablation("stock", None),
     "baseline": lambda: Ablation("baseline", {}),
     "journal": lambda: Ablation("journal", {"journal": True}),
-    "dedupe": lambda: Ablation("dedupe", {"dedupe": True}),
-    "journal+dedupe": lambda: Ablation("journal+dedupe", {"journal": True, "dedupe": True}),
     "baseline-long": lambda: Ablation("baseline-long", {"additional_instructions": LONG_GUIDANCE}),
     "baseline-short": lambda: Ablation("baseline-short", {"max_words": 150}),
     "journal-long": lambda: Ablation("journal-long", {"journal": True, "additional_instructions": LONG_GUIDANCE}),
-    "dedupe-long": lambda: Ablation("dedupe-long", {
-        "dedupe": DedupeConfig(threshold=0.5),
-        "additional_instructions": LONG_GUIDANCE,
-    }),
+    "journal-nocb": lambda: Ablation("journal-nocb", {"journal": True}, register_callbacks=False),
+    "journal-long-nocb": lambda: Ablation(
+        "journal-long-nocb", {"journal": True, "additional_instructions": LONG_GUIDANCE}, register_callbacks=False
+    ),
 }
 
 

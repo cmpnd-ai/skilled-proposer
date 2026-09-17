@@ -1,7 +1,6 @@
 """skilled-proposer: GEPA instruction and Flex code proposers for DSPy."""
 
 from skilled_proposer.code_proposer import SkilledCodeProposer
-from skilled_proposer.dedupe import DedupeConfig
 from skilled_proposer.journal import Journal, JournalEntry
 from skilled_proposer.patch import (
     install_code_proposer,
@@ -13,7 +12,6 @@ from skilled_proposer.signatures import (
     CodeProposalModule,
     CompressInstruction,
     DistillLessons,
-    DiversifyInstruction,
     InstructionProposalModule,
     ProposeGeneralizableInstruction,
     ProposeGeneralizableModuleSource,
@@ -28,12 +26,10 @@ __all__ = [
     "Skill",
     "Journal",
     "JournalEntry",
-    "DedupeConfig",
     "InstructionProposalModule",
     "ProposeGeneralizableInstruction",
     "CompressInstruction",
     "DistillLessons",
-    "DiversifyInstruction",
     "CodeProposalModule",
     "ProposeGeneralizableModuleSource",
     "use_code_proposer",

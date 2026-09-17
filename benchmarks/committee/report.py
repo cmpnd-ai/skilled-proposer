@@ -18,7 +18,6 @@ COLUMNS = [
     ("metric_calls_to_best", "calls to best"),
     ("accept_rate", "accept"),
     ("reflection_calls", "reflect calls"),
-    ("duplicates", "dups"),
     ("auc_valset_vs_calls", "auc"),
     ("best_instruction_words", "words"),
 ]

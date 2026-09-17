@@ -46,7 +46,7 @@ optimizer = dspy.GEPA(
 optimized = optimizer.compile(program, trainset=train, valset=val)
 ```
 
-`gepa_kwargs=proposer.gepa_kwargs()` registers the proposer's callbacks with GEPA. The journal and dedupe features below read those callbacks. Without them the journal records proposals but never learns what GEPA did with them.
+`gepa_kwargs=proposer.gepa_kwargs()` is optional. It registers the proposer's callbacks with GEPA, which lets the journal below record rejections and scores as well as acceptances.
 
 ## Skills
 
@@ -91,7 +91,6 @@ SkilledProposer(
     journal_path=None,             # JSON file for the journal
     journal_entries=12,            # entries shown to the reflection model
     distill_every=5,               # entries between lesson distillations
-    dedupe=False,                  # experimental, see below
 )
 ```
 
@@ -102,39 +101,13 @@ SkilledProposer(
 
 ## Proposal journal (experimental)
 
-GEPA calls the proposer many times in one run, and each call sees only the current instruction and a fresh set of examples. The reflection model has no memory of what it proposed before or whether GEPA kept it. With `journal=True` the proposer records each proposal, the reflection model's own summary of what it changed, the minibatch scores before and after, the valset score when GEPA evaluated it, and whether GEPA accepted or rejected it. Every later call shows the reflection model the newest `journal_entries` entries under a `proposal_journal` field, and the meta-prompt tells it not to repeat an approach the journal shows was rejected.
+GEPA calls the proposer many times in one run, and each call sees only the current instruction and a fresh set of examples. The reflection model has no memory of what it proposed before or whether GEPA kept it. With `journal=True` the proposer records each proposal, the reflection model's own summary of what it changed, and whether GEPA kept it. Every later call shows the reflection model the newest `journal_entries` entries under a `proposal_journal` field, and the meta-prompt tells it not to repeat an approach the journal shows was rejected.
 
 Every `distill_every` closed entries, the proposer asks the reflection model to distill the whole journal into a short list of lessons. The lessons appear above the entries on every later call. A failed distillation keeps the prior lessons.
 
 Set `journal_path` to keep the journal in a JSON file. The proposer writes it after every iteration and loads it when the file exists, so a run resumed from GEPA's `log_dir` keeps its record. The file is also the easiest way to read what the reflection model tried.
 
-The journal needs the callbacks. Pass `gepa_kwargs=proposer.gepa_kwargs()` to `dspy.GEPA`. If the callbacks are missing, the proposer logs one warning and records proposals without verdicts.
-
-The journal pairs a verdict to a proposal by position within the iteration. It assumes one proposal per iteration, which is GEPA's default sampling.
-
-## Dedupe (experimental)
-
-GEPA checks that a proposal differs from its parent, but nothing stops the reflection model from proposing an approach that already failed in an earlier iteration or that already sits in the candidate pool. With `dedupe=True` the proposer screens each proposal against the journal's rejected proposals for that component and against the current candidate pool, including the parent. Two texts count as near duplicates when either their character sequence ratio or their token overlap reaches the threshold.
-
-On a match, the proposer asks the reflection model once for an instruction that takes a materially different approach while still fixing the diagnosed failures. The number of those calls is capped, so a run cannot loop. When the rewrite is still a near duplicate, the default returns it anyway and lets GEPA's minibatch check judge it. The journal marks the entry, so the reflection model sees when it has been repeating itself.
-
-Pass a `DedupeConfig` to change the defaults:
-
-```python
-from skilled_proposer import DedupeConfig, SkilledProposer
-
-proposer = SkilledProposer(
-    journal=True,
-    dedupe=DedupeConfig(
-        threshold=0.85,                 # similarity that counts as a duplicate
-        max_retries=1,                  # rewrite calls per proposal
-        against=("rejected", "pool"),   # what to screen against
-        on_duplicate="return",          # or "skip" to leave the component out
-    ),
-)
-```
-
-`on_duplicate="skip"` drops the component, and GEPA then skips a proposal that has no changed components without spending minibatch evaluations on it. Dedupe works without the journal. It then screens against the pool and the parent only.
+The journal works with no extra setup. It learns a proposal's fate from lineage: when GEPA later hands a proposal back as the parent to improve, that proposal was accepted, and the entry says so. A proposal that never comes back is shown as not chosen. Passing `gepa_kwargs=proposer.gepa_kwargs()` to `dspy.GEPA` registers the proposer's callbacks, which adds rejections, the minibatch scores before and after, and the valset score to each entry. With callbacks, the journal pairs a verdict to a proposal by position within the iteration, which assumes one proposal per iteration, GEPA's default sampling.
 
 ## Recommended engine settings
 
@@ -170,7 +143,7 @@ uv run python -m benchmarks.committee.run --ablations all --max-metric-calls 150
 uv run python -m benchmarks.committee.report
 ```
 
-Each run writes a trajectory, a summary, the optimized program, and the journal when there is one, under `benchmarks/results/`. The report prints one row per configuration with the test score of the best program, the best valset score, metric calls to reach it, accept rate, reflection calls, and duplicates, and writes the curves to a CSV.
+Each run writes a trajectory, a summary, the optimized program, and the journal when there is one, under `benchmarks/results/`. The report prints one row per configuration with the test score of the best program, the best valset score, metric calls to reach it, accept rate, reflection calls, and the word count of the best instruction, and writes the curves to a CSV.
 
 ## Using the standalone gepa package
 

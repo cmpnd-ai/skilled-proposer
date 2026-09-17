@@ -76,12 +76,12 @@ from skilled_proposer import SkilledProposer
 
 def test_ablation_registry_names():
     assert list(ABLATIONS) == [
-        "stock", "baseline", "journal", "dedupe", "journal+dedupe",
-        "baseline-long", "baseline-short", "journal-long", "dedupe-long",
+        "stock", "baseline", "journal", "baseline-long", "baseline-short",
+        "journal-long", "journal-nocb", "journal-long-nocb",
     ]
-    dedupe_long = ABLATIONS["dedupe-long"]()
-    assert dedupe_long.proposer_kwargs["dedupe"].threshold == 0.5
-    assert dedupe_long.proposer_kwargs["additional_instructions"] == LONG_GUIDANCE
+    nocb = ABLATIONS["journal-long-nocb"]()
+    assert nocb.register_callbacks is False
+    assert nocb.proposer_kwargs == {"journal": True, "additional_instructions": LONG_GUIDANCE}
     long = ABLATIONS["baseline-long"]()
     short = ABLATIONS["baseline-short"]()
     journal_long = ABLATIONS["journal-long"]()
@@ -96,13 +96,16 @@ def test_ablation_registry_names():
 def test_ablation_builds_proposer_or_none(tmp_path):
     stock = ABLATIONS["stock"]()
     assert stock.build_proposer(tmp_path) is None
-    both = ABLATIONS["journal+dedupe"]()
+    both = ABLATIONS["journal"]()
     proposer = both.build_proposer(tmp_path)
     assert isinstance(proposer, SkilledProposer)
-    assert proposer.journal_enabled and proposer.dedupe is not None
+    assert proposer.journal_enabled
     assert proposer.journal_path == tmp_path / "journal.json"
     kwargs = both.gepa_kwargs(proposer, extra_callbacks=[object()])
     assert kwargs["callbacks"][0] is proposer and len(kwargs["callbacks"]) == 2
+    nocb = ABLATIONS["journal-nocb"]()
+    recorder = object()
+    assert nocb.gepa_kwargs(nocb.build_proposer(tmp_path), extra_callbacks=[recorder])["callbacks"] == [recorder]
 
 
 def test_report_table_and_curves(tmp_path):
@@ -112,7 +115,7 @@ def test_report_table_and_curves(tmp_path):
         (d / "summary.json").write_text(json.dumps({
             "ablation": name, "seed": 13, "test_score": score, "best_valset_score": score,
             "metric_calls_to_best": 100, "accept_rate": 0.25, "reflection_calls": 10,
-            "duplicates": 1, "duplicates_after_retry": 0, "auc_valset_vs_calls": 12.0,
+            "auc_valset_vs_calls": 12.0,
         }))
         (d / "trajectory.jsonl").write_text(json.dumps({"iteration": 1, "metric_calls_used": 10,
                                                         "best_valset_score": score}) + "\n")

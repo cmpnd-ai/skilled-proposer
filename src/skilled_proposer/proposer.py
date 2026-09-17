@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from statistics import fmean
 from typing import Any, Mapping, Sequence
@@ -21,7 +21,6 @@ except ImportError:  # dspy < 3.x fallback: nothing raises it
     class LMError(Exception):
         pass
 
-from skilled_proposer.dedupe import DedupeConfig, find_duplicates, render_duplicates
 from skilled_proposer.journal import Journal, JournalEntry
 from skilled_proposer.signatures import InstructionProposalModule
 from skilled_proposer.skill import Skill, render_skills
@@ -33,12 +32,10 @@ _WORD_RE = re.compile(r"\S+")
 
 @dataclass
 class Proposal:
-    """One component's proposal and what the proposer learned about it."""
+    """One component's proposal and the reflection model's summary of it."""
 
     text: str
     change_summary: str = ""
-    near_duplicates: list[str] = field(default_factory=list)
-    duplicate_after_retry: bool = False
 
 
 def _attempt(propose, *, name: str, retries: int, on_error: str, label: str):
@@ -109,24 +106,20 @@ class SkilledProposer:
             an LM/provider error (LMError) always propagates.
         journal: Experimental. Record every proposal and what GEPA did with
             it, and show that record to the reflection model on each call.
-            Register the proposer's callbacks with
-            ``dspy.GEPA(gepa_kwargs=proposer.gepa_kwargs())``; without
-            that, the journal records proposals but never their verdicts.
-            The journal pairs a verdict to a proposal by position within
-            the iteration, which assumes one proposal per iteration, GEPA's
-            default sampling.
+            With no extra setup, the journal learns a proposal's fate from
+            lineage: a proposal that GEPA later hands back as a parent was
+            accepted. Registering the proposer's callbacks with
+            ``dspy.GEPA(gepa_kwargs=proposer.gepa_kwargs())`` adds
+            rejections, minibatch scores, and valset scores to the record.
+            With callbacks, the journal pairs a verdict to a proposal by
+            position within the iteration, which assumes one proposal per
+            iteration, GEPA's default sampling.
         journal_path: Optional JSON file for the journal. Loaded when it
             exists and written after every iteration, so a resumed run keeps
             its record. Requires journal=True.
         journal_entries: How many recent entries render into the prompt.
         distill_every: Closed entries between lesson distillations. None
             turns distillation off. Ignored when journal is off.
-        dedupe: Experimental. Screen each proposal against earlier rejected
-            proposals and the current candidate pool. On a near duplicate,
-            ask the reflection model once for a materially different
-            approach. True uses DedupeConfig(); pass a DedupeConfig to
-            change the threshold, the retry cap, the sets, or what happens
-            to a proposal that is still a duplicate.
     """
 
     def __init__(
@@ -145,7 +138,6 @@ class SkilledProposer:
         journal_path: str | Path | None = None,
         journal_entries: int = 12,
         distill_every: int | None = 5,
-        dedupe: bool | DedupeConfig = False,
     ):
         if max_tokens is not None and max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
@@ -161,14 +153,6 @@ class SkilledProposer:
             raise ValueError("journal_entries must be positive")
         if distill_every is not None and distill_every <= 0:
             raise ValueError("distill_every must be positive or None")
-        if isinstance(dedupe, DedupeConfig):
-            self.dedupe: DedupeConfig | None = dedupe
-        elif dedupe is True:
-            self.dedupe = DedupeConfig()
-        elif dedupe is False:
-            self.dedupe = None
-        else:
-            raise ValueError("dedupe must be a bool or a DedupeConfig")
 
         self.skills = [Skill.load(s) for s in (skills or [])]
         self.additional_instructions = (additional_instructions or "").strip()
@@ -185,15 +169,15 @@ class SkilledProposer:
         self.journal_entries = journal_entries
         self.distill_every = distill_every if journal else None
         self.journal = Journal.load(self.journal_path) if self.journal_path else Journal()
-        self.stats = {"duplicates": 0, "duplicates_after_retry": 0}
 
-        # Callback bookkeeping for the current iteration.
+        # Callback bookkeeping for the current iteration. Without callbacks the
+        # proposer counts its own calls as iterations and infers verdicts from
+        # which proposals come back as parents.
         self._iteration = 0
         self._callbacks_seen = False
-        self._warned_unregistered = False
+        self._logged_lineage_mode = False
         self._pending_parents: list[tuple[int, dict[str, str]]] = []
         self._calls_this_iteration = 0
-        self._pool: list[dict[str, str]] = []
         # The reflection LM is ambient only during the proposal call (dspy.GEPA
         # wraps that call in dspy.context(lm=reflection_lm)), so it is captured
         # here for distillation, which runs later from a callback.
@@ -215,7 +199,7 @@ class SkilledProposer:
     ) -> dict[str, str]:
         if self.prompt_model is None:
             self._reflection_lm = getattr(dspy.settings, "lm", None)
-        parent_idx = self._begin_call()
+        parent_idx = self._begin_call(candidate)
         task = self._calls_this_iteration
         self._calls_this_iteration += 1
 
@@ -245,30 +229,43 @@ class SkilledProposer:
                         parent_text=current,
                         proposed_text=proposal.text,
                         change_summary=proposal.change_summary,
-                        near_duplicates=list(proposal.near_duplicates),
-                        duplicate_after_retry=proposal.duplicate_after_retry,
                     )
                 )
+        if self.journal_enabled and not self._callbacks_seen:
+            self._save_journal()
         return results
 
-    def _begin_call(self) -> int | None:
-        """Pick the parent for this call and warn once if no callback ever fired."""
+    def _begin_call(self, candidate: Mapping[str, str]) -> int | None:
+        """Pick the parent for this call. Without callbacks, count the call as
+        an iteration and learn verdicts from lineage."""
         if not self._callbacks_seen:
             self._iteration += 1
             self._calls_this_iteration = 0
-            screens_pool = self.dedupe is not None and "pool" in self.dedupe.against
-            if (self.journal_enabled or screens_pool) and not self._warned_unregistered:
-                self._warned_unregistered = True
-                logger.warning(
-                    "SkilledProposer callbacks are not registered, so the journal "
-                    "records proposals without verdicts and pool screening sees "
-                    "only the parent. Pass gepa_kwargs=proposer.gepa_kwargs() to "
-                    "dspy.GEPA."
-                )
+            if self.journal_enabled:
+                self._advance_lineage(candidate)
         if self._pending_parents:
             parent_idx, _ = self._pending_parents.pop(0)
             return parent_idx
         return None
+
+    def _advance_lineage(self, candidate: Mapping[str, str]) -> None:
+        """Mark proposals that came back as parents accepted, close the
+        previous iteration, and distill when due."""
+        if not self._logged_lineage_mode:
+            self._logged_lineage_mode = True
+            self.journal.source = "lineage"
+            logger.info(
+                "SkilledProposer journal is inferring verdicts from lineage. "
+                "Register callbacks with gepa_kwargs=proposer.gepa_kwargs() "
+                "to record rejections and scores as well."
+            )
+        for e in self.journal.entries:
+            if e.accepted is None and candidate.get(e.component) == e.proposed_text:
+                e.accepted = True
+                e.reason = f"Chosen as the parent in iteration {self._iteration}."
+        self.journal.close(self._iteration - 1)
+        if self.distill_every and self.journal.closed_since_distill >= self.distill_every:
+            self._distill()
 
     def gepa_kwargs(self, **overrides: Any) -> dict[str, Any]:
         """Keyword arguments for dspy.GEPA(gepa_kwargs=...) that register this
@@ -326,7 +323,6 @@ class SkilledProposer:
         state = event["state"]
         self._attach_minibatch_scores(iteration, state)
         self.journal.close(iteration)
-        self._pool = [dict(c) for c in getattr(state, "program_candidates", [])]
         self._save_journal()
         if self.distill_every and self.journal.closed_since_distill >= self.distill_every:
             self._distill()
@@ -391,67 +387,8 @@ class SkilledProposer:
         )
         pred = self._run(self.module, **kwargs)
         proposal = _proposal_from(pred)
-
-        if self.dedupe is not None:
-            proposal = self._screen(name, current_instruction, proposal, kwargs)
-            if proposal is None:
-                return None
-
         proposal.text = self._enforce_length(proposal.text)
         return proposal
-
-    def _screen(
-        self, name: str, current_instruction: str, proposal: Proposal, kwargs: dict[str, Any]
-    ) -> Proposal | None:
-        """Diversify a near-duplicate proposal at most max_retries times."""
-        config = self.dedupe
-        screening = self._screening_set(name, current_instruction)
-        matches = find_duplicates(proposal.text, screening, config.threshold)
-        if not matches:
-            return proposal
-        self.stats["duplicates"] += 1
-        first_labels = [label for label, _, _ in matches]
-
-        calls = 0
-        while matches and calls < config.max_retries:
-            calls += 1
-            pred = self._run(
-                self.module.diversify,
-                current_instruction=current_instruction,
-                proposal=proposal.text,
-                near_duplicates=render_duplicates(matches),
-                examples_with_feedback=kwargs["examples_with_feedback"],
-                reference_skills=kwargs["reference_skills"],
-                additional_guidance=kwargs["additional_guidance"],
-                length_limit=kwargs["length_limit"],
-            )
-            proposal = _proposal_from(pred)
-            matches = find_duplicates(proposal.text, screening, config.threshold)
-
-        proposal.near_duplicates = first_labels
-        if matches:
-            proposal.duplicate_after_retry = True
-            self.stats["duplicates_after_retry"] += 1
-            if config.on_duplicate == "skip":
-                logger.info(
-                    "Proposal for component %r is still a near duplicate after %d "
-                    "diversify call(s); leaving it out.", name, calls,
-                )
-                return None
-        return proposal
-
-    def _screening_set(self, name: str, parent_text: str) -> list[tuple[str, str]]:
-        items: list[tuple[str, str]] = []
-        if "rejected" in self.dedupe.against:
-            for i, text in enumerate(self.journal.rejected_texts(name), 1):
-                items.append((f"rejected entry {i}", text))
-        if "pool" in self.dedupe.against:
-            items.append(("the current instruction", parent_text))
-            for i, candidate in enumerate(self._pool, 1):
-                text = candidate.get(name)
-                if text is not None and text != parent_text:
-                    items.append((f"candidate {i}", text))
-        return items
 
     def _render_journal(self) -> str:
         if not self.journal_enabled:

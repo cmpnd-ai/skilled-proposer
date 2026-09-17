@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 _WORD_RE = re.compile(r"\S+")
@@ -24,8 +24,6 @@ class JournalEntry:
     valset_average: float | None = None
     accepted: bool | None = None
     reason: str = ""
-    near_duplicates: list[str] = field(default_factory=list)
-    duplicate_after_retry: bool = False
     closed: bool = False
 
     @property
@@ -38,17 +36,24 @@ class JournalEntry:
 
 
 class Journal:
-    """Ordered entries plus the lessons distilled from them."""
+    """Ordered entries plus the lessons distilled from them.
+
+    ``source`` says where verdicts come from. "callbacks" means GEPA reported
+    them. "lineage" means the proposer inferred them from which proposals came
+    back as parents, so an entry without a verdict was simply never chosen.
+    """
 
     def __init__(
         self,
         entries: list[JournalEntry] | None = None,
         lessons: str = "",
         closed_since_distill: int = 0,
+        source: str = "callbacks",
     ):
         self.entries: list[JournalEntry] = list(entries or [])
         self.lessons = lessons
         self.closed_since_distill = closed_since_distill
+        self.source = source
 
     # -- Entries ------------------------------------------------------------
 
@@ -76,13 +81,6 @@ class Journal:
         self.closed_since_distill += closed
         return closed
 
-    def rejected_texts(self, component: str) -> list[str]:
-        return [
-            e.proposed_text
-            for e in self.entries
-            if e.closed and e.accepted is False and e.component == component
-        ]
-
     # -- Rendering ----------------------------------------------------------
 
     def render(self, limit: int | None = None) -> str:
@@ -94,7 +92,7 @@ class Journal:
         if lessons:
             parts.append("## Lessons\n\n" + lessons)
         if entries:
-            blocks = "\n\n".join(_render_entry(e) for e in entries)
+            blocks = "\n\n".join(_render_entry(e, self.source) for e in entries)
             parts.append("## Recent proposals\n\n" + blocks)
         return "\n\n".join(parts)
 
@@ -105,6 +103,7 @@ class Journal:
             {
                 "lessons": self.lessons,
                 "closed_since_distill": self.closed_since_distill,
+                "source": self.source,
                 "entries": [asdict(e) for e in self.entries],
             },
             indent=2,
@@ -117,6 +116,7 @@ class Journal:
             entries=[JournalEntry(**e) for e in data.get("entries", [])],
             lessons=data.get("lessons", ""),
             closed_since_distill=data.get("closed_since_distill", 0),
+            source=data.get("source", "callbacks"),
         )
 
     def save(self, path: str | Path) -> None:
@@ -130,8 +130,11 @@ class Journal:
         return cls.from_json(p.read_text())
 
 
-def _render_entry(e: JournalEntry) -> str:
-    lines = [f"### Iteration {e.iteration}, component `{e.component}`, {e.verdict}"]
+def _render_entry(e: JournalEntry, source: str = "callbacks") -> str:
+    verdict = e.verdict
+    if e.accepted is None and source == "lineage":
+        verdict = "not chosen as a parent so far"
+    lines = [f"### Iteration {e.iteration}, component `{e.component}`, {verdict}"]
     if e.accepted is not None and e.minibatch_before is not None and e.minibatch_after is not None:
         score = f"Minibatch {e.minibatch_before:.2f} -> {e.minibatch_after:.2f}."
         if e.valset_average is not None:
@@ -143,11 +146,6 @@ def _render_entry(e: JournalEntry) -> str:
     lines.append(_size_line(e))
     if e.reason:
         lines.append(f"Reason: {e.reason}")
-    if e.near_duplicates:
-        dup = "Near duplicate of " + ", ".join(e.near_duplicates) + "."
-        if e.duplicate_after_retry:
-            dup += " Still a near duplicate after a rewrite."
-        lines.append(dup)
     return "\n".join(lines)
 
 
