@@ -79,3 +79,55 @@ def test_propose_batch_enforces_length_per_candidate():
     proposer = SkilledProposer(candidates=2, prompt_model=lm, max_words=5)
     proposals = proposer._propose_batch("a", "old", [])
     assert [p.text for p in proposals] == ["Short one.", "Short two."]
+
+
+def test_batch_serves_candidates_across_calls_then_regenerates():
+    lm = batch_lm(["one", "two", "three"], ["four", "five", "six"])
+    proposer = SkilledProposer(candidates=3, prompt_model=lm)
+    assert [call(proposer)["a"] for _ in range(4)] == ["one", "two", "three", "four"]
+    assert len(lm.history) == 2
+
+
+def test_parent_change_replaces_cache():
+    lm = batch_lm(["one", "two", "three"], ["four", "five", "six"])
+    proposer = SkilledProposer(candidates=3, prompt_model=lm)
+    assert call(proposer, parent="old")["a"] == "one"
+    assert call(proposer, parent="one")["a"] == "four"
+    assert call(proposer, parent="one")["a"] == "five"
+    assert len(lm.history) == 2
+    parent, leftovers = proposer._cache["a"]
+    assert parent == "one"
+    assert [p.text for p in leftovers] == ["six"]
+
+
+def test_short_batch_serves_what_it_has():
+    lm = batch_lm(["one", "two"], ["three", "four", "five"])
+    proposer = SkilledProposer(candidates=3, prompt_model=lm)
+    assert [call(proposer)["a"] for _ in range(3)] == ["one", "two", "three"]
+    assert len(lm.history) == 2
+
+
+def test_cache_is_per_component():
+    lm = batch_lm(["a1", "a2"], ["b1", "b2"])
+    proposer = SkilledProposer(candidates=2, prompt_model=lm)
+    both = dict(candidate={"a": "old a", "b": "old b"}, reflective_dataset={"a": [], "b": []},
+                components_to_update=["a", "b"])
+    assert proposer(**both) == {"a": "a1", "b": "b1"}
+    assert proposer(**both) == {"a": "a2", "b": "b2"}
+    assert len(lm.history) == 2
+
+
+def test_single_path_makes_one_call_per_component():
+    lm = DummyLM([{"new_instruction": "New."}])
+    proposer = SkilledProposer(prompt_model=lm)
+    assert call(proposer)["a"] == "New."
+    assert proposer._cache == {}
+
+
+def test_unusable_batch_follows_on_error_policy():
+    same = {"new_instructions": ["old"], "change_summaries": ["no change"]}
+    proposer = SkilledProposer(candidates=2, prompt_model=DummyLM([same, same]))
+    assert call(proposer) == {}
+    proposer = SkilledProposer(candidates=2, prompt_model=DummyLM([same]), on_error="raise")
+    with pytest.raises(ValueError):
+        call(proposer)

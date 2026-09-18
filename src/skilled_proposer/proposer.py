@@ -214,7 +214,7 @@ class SkilledProposer:
             if self.max_examples is not None:
                 examples = examples[: self.max_examples]
             proposal = _attempt(
-                lambda: self._propose_one(name, current, examples),
+                lambda: self._serve(name, current, examples),
                 name=name,
                 retries=self.retries,
                 on_error=self.on_error,
@@ -281,6 +281,20 @@ class SkilledProposer:
             with dspy.context(lm=self.prompt_model):
                 return predictor(**kwargs)
         return predictor(**kwargs)
+
+    def _serve(
+        self, name: str, current_instruction: str, examples: Sequence[Mapping[str, Any]]
+    ) -> Proposal | None:
+        """Return the next proposal for a component, from the cache when it
+        holds leftovers for this parent text, else from a fresh reflection."""
+        if self.candidates is None:
+            return self._propose_one(name, current_instruction, examples)
+        cached = self._cache.get(name)
+        if cached is not None and cached[0] == current_instruction and cached[1]:
+            return cached[1].pop(0)
+        proposals = self._propose_batch(name, current_instruction, examples)
+        self._cache[name] = (current_instruction, proposals[1:])
+        return proposals[0]
 
     def _proposal_inputs(
         self, current_instruction: str, examples: Sequence[Mapping[str, Any]]
