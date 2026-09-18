@@ -116,16 +116,62 @@ def change_summary_field():
     return dspy.OutputField(desc="One or two sentences naming what you changed and why.")
 
 
+CANDIDATES_SECTION = """## Candidates
+
+Produce the number of candidate instructions given in the candidate count.
+Each candidate must fix the diagnosed failures by a route materially
+different from the other candidates, such as a different task
+decomposition, a different set of decision rules, or a different output
+contract. Each candidate must stand alone as a complete instruction. Name
+the route each candidate takes in its change summary."""
+
+
+def batch_signature(base_instructions: str | None = None) -> type[dspy.Signature]:
+    """The proposal signature reshaped to return several candidates in one call.
+
+    The prompt is the core docstring, or base_instructions when given,
+    followed by the candidates section. The single output becomes two
+    lists in matching order.
+    """
+    base = (base_instructions or ProposeGeneralizableInstruction.instructions).rstrip()
+    signature = ProposeGeneralizableInstruction.with_instructions(base + "\n\n" + CANDIDATES_SECTION)
+    signature = signature.delete("new_instruction")
+    signature = signature.append(
+        "candidate_count",
+        dspy.InputField(desc="The number of candidate instructions to produce."),
+        str,
+    )
+    signature = signature.append(
+        "new_instructions",
+        dspy.OutputField(desc="The candidate instructions, in order. Instruction text only."),
+        list[str],
+    )
+    signature = signature.append(
+        "change_summaries",
+        dspy.OutputField(
+            desc="One or two sentences per candidate naming what it changed and why, "
+            "in the same order as the instructions."
+        ),
+        list[str],
+    )
+    return signature
+
+
 class InstructionProposalModule(dspy.Module):
-    """dspy.Module housing the proposal, compression, and distillation
-    predictors.
+    """dspy.Module housing the proposal, batch proposal, compression, and
+    distillation predictors.
 
     Keeping the predictors on a Module makes them discoverable via
     named_predictors(), lets their state be saved/loaded, and routes calls
     through the standard Module path (callbacks, history).
     """
 
-    def __init__(self, base_instructions: str | None = None, with_change_summary: bool = False):
+    def __init__(
+        self,
+        base_instructions: str | None = None,
+        with_change_summary: bool = False,
+        candidates: int | None = None,
+    ):
         super().__init__()
         signature = ProposeGeneralizableInstruction
         if base_instructions:
@@ -133,6 +179,7 @@ class InstructionProposalModule(dspy.Module):
         if with_change_summary:
             signature = signature.append("change_summary", change_summary_field(), str)
         self.propose = dspy.Predict(signature)
+        self.propose_many = dspy.Predict(batch_signature(base_instructions)) if candidates else None
         self.compress = dspy.Predict(CompressInstruction)
         self.distill = dspy.Predict(DistillLessons)
 
@@ -153,6 +200,27 @@ class InstructionProposalModule(dspy.Module):
             reference_skills=reference_skills,
             additional_guidance=additional_guidance,
             length_limit=length_limit,
+        )
+
+    def forward_many(
+        self,
+        *,
+        current_instruction: str,
+        examples_with_feedback: str,
+        proposal_journal: str,
+        reference_skills: str,
+        additional_guidance: str,
+        length_limit: str,
+        candidate_count: int,
+    ) -> dspy.Prediction:
+        return self.propose_many(
+            current_instruction=current_instruction,
+            examples_with_feedback=examples_with_feedback,
+            proposal_journal=proposal_journal,
+            reference_skills=reference_skills,
+            additional_guidance=additional_guidance,
+            length_limit=length_limit,
+            candidate_count=str(candidate_count),
         )
 
 

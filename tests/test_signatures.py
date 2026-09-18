@@ -1,3 +1,6 @@
+import dspy
+from dspy.utils.dummies import DummyLM
+
 from skilled_proposer.signatures import (
     CodeProposalModule,
     CompressInstruction,
@@ -5,6 +8,7 @@ from skilled_proposer.signatures import (
     InstructionProposalModule,
     ProposeGeneralizableInstruction,
     ProposeGeneralizableModuleSource,
+    batch_signature,
 )
 
 
@@ -98,3 +102,43 @@ def test_code_module_base_instructions_override():
 def test_code_module_named_predictors():
     names = {name for name, _ in CodeProposalModule().named_predictors()}
     assert names == {"propose"}
+
+
+def test_batch_signature_fields():
+    sig = batch_signature()
+    assert set(sig.input_fields) == set(ProposeGeneralizableInstruction.input_fields) | {"candidate_count"}
+    assert list(sig.output_fields) == ["new_instructions", "change_summaries"]
+    assert sig.instructions.startswith(ProposeGeneralizableInstruction.instructions.rstrip())
+    assert "## Candidates" in sig.instructions
+
+
+def test_batch_signature_base_instructions_replace_core_text():
+    sig = batch_signature("Custom base.")
+    assert sig.instructions.startswith("Custom base.")
+    assert "## Candidates" in sig.instructions
+    assert "Diagnose the failures" not in sig.instructions
+
+
+def test_core_signature_untouched_by_batch_builder():
+    batch_signature()
+    assert set(ProposeGeneralizableInstruction.output_fields) == {"new_instruction"}
+    assert "## Candidates" not in ProposeGeneralizableInstruction.instructions
+
+
+def test_module_builds_batch_predictor_only_when_candidates_set():
+    assert InstructionProposalModule().propose_many is None
+    module = InstructionProposalModule(candidates=3)
+    assert isinstance(module.propose_many, dspy.Predict)
+    lm = DummyLM([{"new_instructions": ["one", "two"], "change_summaries": ["r1", "r2"]}])
+    with dspy.context(lm=lm):
+        pred = module.forward_many(
+            current_instruction="c",
+            examples_with_feedback="e",
+            proposal_journal="None",
+            reference_skills="None",
+            additional_guidance="None",
+            length_limit="None",
+            candidate_count=2,
+        )
+    assert pred.new_instructions == ["one", "two"]
+    assert pred.change_summaries == ["r1", "r2"]
