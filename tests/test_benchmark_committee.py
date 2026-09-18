@@ -77,6 +77,7 @@ from skilled_proposer import SkilledProposer
 def test_ablation_registry_names():
     assert list(ABLATIONS) == [
         "stock", "baseline", "journal", "baseline-long", "baseline-short", "journal-long",
+        "sameparent", "batch",
     ]
     long = ABLATIONS["baseline-long"]()
     short = ABLATIONS["baseline-short"]()
@@ -170,3 +171,20 @@ def test_tracing_on_with_key(monkeypatch, capsys):
     assert run.configure_tracing() is True
     assert calls == [("configure", {"project_tags": run.TRACE_TAGS}), ("auto_instrument", {})]
     assert "tracing on" in capsys.readouterr().out
+
+
+def test_batch_ablations_share_engine_settings():
+    from gepa.strategies.proposal_sampling import SameParentSampling
+    from gepa.strategies.proposal_selection import AllImprovements
+
+    from benchmarks.committee.ablations import resolve
+
+    sameparent, batch = resolve(["sameparent", "batch"])
+    for ablation in (sameparent, batch):
+        kwargs = ablation.gepa_kwargs(extra_callbacks=[])
+        assert isinstance(kwargs["sampling_strategy"], SameParentSampling)
+        assert kwargs["sampling_strategy"].n == 4
+        assert isinstance(kwargs["selection_strategy"], AllImprovements)
+        assert kwargs["callbacks"] == []
+    assert sameparent.proposer_kwargs == {}
+    assert batch.proposer_kwargs == {"candidates": 4}

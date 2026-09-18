@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from gepa.strategies.proposal_sampling import SameParentSampling
+from gepa.strategies.proposal_selection import AllImprovements
+
 from skilled_proposer import SkilledProposer
 
 SKILLS = [str(Path(__file__).resolve().parents[2] / "skills" / "prompt-engineering")]
@@ -38,6 +41,11 @@ LONG_GUIDANCE = (
     "rules, the output format, and the edge cases the examples reveal."
 )
 
+def batched_engine() -> dict[str, Any]:
+    """Four proposals from one parent per iteration, keeping every improvement."""
+    return {"sampling_strategy": SameParentSampling(4), "selection_strategy": AllImprovements()}
+
+
 ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "stock": lambda: Ablation("stock", None),
     "baseline": lambda: Ablation("baseline", {}),
@@ -45,6 +53,8 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "baseline-long": lambda: Ablation("baseline-long", {"additional_instructions": LONG_GUIDANCE}),
     "baseline-short": lambda: Ablation("baseline-short", {"max_words": 150}),
     "journal-long": lambda: Ablation("journal-long", {"journal": True, "additional_instructions": LONG_GUIDANCE}),
+    "sameparent": lambda: Ablation("sameparent", {}, batched_engine()),
+    "batch": lambda: Ablation("batch", {"candidates": 4}, batched_engine()),
 }
 
 
