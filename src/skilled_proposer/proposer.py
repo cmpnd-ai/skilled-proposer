@@ -114,6 +114,21 @@ class SkilledProposer:
         journal_entries: How many recent entries render into the prompt.
         distill_every: Closed entries between lesson distillations. None
             turns distillation off. Ignored when journal is off.
+        candidates: Experimental. Number of candidate instructions one
+            reflection call produces for a component. None or 1 keeps the
+            single proposal path. With 2 or more, the first call for a
+            parent runs one batch reflection, returns the first candidate,
+            and keeps the rest. Later calls with the same parent text
+            serve the kept candidates in order until they run out, then a
+            fresh batch runs. A parent change discards kept candidates.
+            Pair it with gepa_kwargs={"sampling_strategy":
+            SameParentSampling(n), "selection_strategy": AllImprovements()}
+            where n equals candidates. With the default sampling strategy
+            GEPA evaluates one candidate per iteration and the rest are
+            discarded when the parent changes. With BestImprovement GEPA
+            keeps one candidate per iteration and discards the diversity
+            the batch produced. A task GEPA skips mid iteration leaves a
+            kept candidate for the next iteration with the same parent.
     """
 
     def __init__(
@@ -132,6 +147,7 @@ class SkilledProposer:
         journal_path: str | Path | None = None,
         journal_entries: int = 12,
         distill_every: int | None = 5,
+        candidates: int | None = None,
     ):
         if max_tokens is not None and max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
@@ -147,6 +163,8 @@ class SkilledProposer:
             raise ValueError("journal_entries must be positive")
         if distill_every is not None and distill_every <= 0:
             raise ValueError("distill_every must be positive or None")
+        if candidates is not None and candidates < 1:
+            raise ValueError("candidates must be positive or None")
 
         self.skills = [Skill.load(s) for s in (skills or [])]
         self.additional_instructions = (additional_instructions or "").strip()
@@ -167,9 +185,13 @@ class SkilledProposer:
         # Each proposal call counts as one journal iteration.
         self._iteration = 0
 
+        self.candidates = candidates if candidates and candidates > 1 else None
+        # Leftover batch candidates per component, with the parent text that produced them.
+        self._cache: dict[str, tuple[str, list[Proposal]]] = {}
+
         # All LM-facing predictors live on a dspy.Module.
         self.module = InstructionProposalModule(
-            self.base_instructions, with_change_summary=journal
+            self.base_instructions, with_change_summary=journal, candidates=self.candidates
         )
 
     # -- ProposalFn ---------------------------------------------------------
@@ -260,10 +282,10 @@ class SkilledProposer:
                 return predictor(**kwargs)
         return predictor(**kwargs)
 
-    def _propose_one(
-        self, name: str, current_instruction: str, examples: Sequence[Mapping[str, Any]]
-    ) -> Proposal | None:
-        kwargs = dict(
+    def _proposal_inputs(
+        self, current_instruction: str, examples: Sequence[Mapping[str, Any]]
+    ) -> dict[str, str]:
+        return dict(
             current_instruction=current_instruction,
             examples_with_feedback=_render_examples(examples),
             proposal_journal=self._render_journal(),
@@ -271,10 +293,45 @@ class SkilledProposer:
             additional_guidance=self.additional_instructions or "None",
             length_limit=self._length_limit_text(),
         )
-        pred = self._run(self.module, **kwargs)
+
+    def _propose_one(
+        self, name: str, current_instruction: str, examples: Sequence[Mapping[str, Any]]
+    ) -> Proposal | None:
+        pred = self._run(self.module, **self._proposal_inputs(current_instruction, examples))
         proposal = _proposal_from(pred)
         proposal.text = self._enforce_length(proposal.text)
         return proposal
+
+    def _propose_batch(
+        self, name: str, current_instruction: str, examples: Sequence[Mapping[str, Any]]
+    ) -> list[Proposal]:
+        """Run one batch reflection and return every usable candidate in order.
+
+        Drops empty candidates, candidates equal to the parent, and repeats
+        within the batch. Raises ValueError when nothing usable remains so
+        the retry policy applies.
+        """
+        kwargs = self._proposal_inputs(current_instruction, examples)
+        pred = self._run(self.module.forward_many, candidate_count=self.candidates, **kwargs)
+        instructions = list(pred.new_instructions or [])
+        summaries = list(getattr(pred, "change_summaries", None) or [])
+        proposals: list[Proposal] = []
+        seen = {current_instruction.strip()}
+        for i, raw in enumerate(instructions):
+            text = (raw or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            summary = (summaries[i] if i < len(summaries) else "") or ""
+            proposals.append(Proposal(text=self._enforce_length(text), change_summary=summary.strip()))
+        if not proposals:
+            raise ValueError("the batch proposal returned no usable candidates")
+        if len(proposals) < self.candidates:
+            logger.debug(
+                "Batch proposal for component %r returned %d usable candidate(s) of %d requested.",
+                name, len(proposals), self.candidates,
+            )
+        return proposals
 
     def _render_journal(self) -> str:
         if not self.journal_enabled:
