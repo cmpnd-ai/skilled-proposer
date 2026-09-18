@@ -48,8 +48,8 @@ def test_propose_batch_passes_candidate_count():
     lm = batch_lm(["one", "two", "three"])
     SkilledProposer(candidates=3, prompt_model=lm)._propose_batch("a", "old", [])
     prompt = str(lm.history[0]["messages"])
-    assert "candidate_count" in prompt
-    assert "3" in prompt
+    idx = prompt.rindex("candidate_count")
+    assert "3" in prompt[idx : idx + 80]
 
 
 def test_propose_batch_drops_empty_parent_and_duplicate_candidates():
@@ -81,6 +81,20 @@ def test_propose_batch_enforces_length_per_candidate():
     assert [p.text for p in proposals] == ["Short one.", "Short two."]
 
 
+def test_propose_batch_drops_candidates_that_collapse_after_length_enforcement():
+    lm = DummyLM([
+        {
+            "new_instructions": ["one two three four", "one two three five"],
+            "change_summaries": ["a", "b"],
+        },
+        {"shortened_instruction": "one two three"},
+        {"shortened_instruction": "one two three"},
+    ])
+    proposer = SkilledProposer(candidates=2, prompt_model=lm, max_words=3)
+    proposals = proposer._propose_batch("a", "old", [])
+    assert [p.text for p in proposals] == ["one two three"]
+
+
 def test_batch_serves_candidates_across_calls_then_regenerates():
     lm = batch_lm(["one", "two", "three"], ["four", "five", "six"])
     proposer = SkilledProposer(candidates=3, prompt_model=lm)
@@ -104,6 +118,26 @@ def test_short_batch_serves_what_it_has():
     lm = batch_lm(["one", "two"], ["three", "four", "five"])
     proposer = SkilledProposer(candidates=3, prompt_model=lm)
     assert [call(proposer)["a"] for _ in range(3)] == ["one", "two", "three"]
+    assert len(lm.history) == 2
+
+
+def test_round_robin_components_get_separate_batches():
+    """The default round robin component selector sends one component at a
+    time. Each component then starts its own batch, and the served texts
+    do not condition on each other the way they would under
+    component_selector="all"."""
+    lm = batch_lm(["a1", "a2"], ["b1", "b2"])
+    proposer = SkilledProposer(candidates=2, prompt_model=lm)
+    parent = {"a": "old a", "b": "old b"}
+    served = [
+        proposer(
+            candidate=parent,
+            reflective_dataset={"a": [], "b": []},
+            components_to_update=components,
+        )
+        for components in (["a"], ["b"], ["a"])
+    ]
+    assert [r[c] for r, c in zip(served, ["a", "b", "a"])] == ["a1", "b1", "a2"]
     assert len(lm.history) == 2
 
 

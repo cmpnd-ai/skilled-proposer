@@ -123,12 +123,14 @@ class SkilledProposer:
             fresh batch runs. A parent change discards kept candidates.
             Pair it with gepa_kwargs={"sampling_strategy":
             SameParentSampling(n), "selection_strategy": AllImprovements()}
-            where n equals candidates. With the default sampling strategy
-            GEPA evaluates one candidate per iteration and the rest are
-            discarded when the parent changes. With BestImprovement GEPA
-            keeps one candidate per iteration and discards the diversity
-            the batch produced. A task GEPA skips mid iteration leaves a
-            kept candidate for the next iteration with the same parent.
+            where n equals candidates, and pass component_selector="all" to
+            dspy.GEPA, or use a program with a single predictor. With the
+            default sampling strategy GEPA evaluates one candidate per
+            iteration and the rest are discarded when the parent changes.
+            With BestImprovement GEPA keeps one candidate per iteration and
+            discards the diversity the batch produced. A task GEPA skips
+            mid iteration leaves a kept candidate for the next iteration
+            with the same parent.
     """
 
     def __init__(
@@ -322,7 +324,9 @@ class SkilledProposer:
         """Run one batch reflection and return every usable candidate in order.
 
         Drops empty candidates, candidates equal to the parent, and repeats
-        within the batch. Raises ValueError when nothing usable remains so
+        within the batch, including repeats that only appear after length
+        enforcement compresses a candidate down to text already kept or to
+        the parent text. Raises ValueError when nothing usable remains so
         the retry policy applies.
         """
         kwargs = self._proposal_inputs(current_instruction, examples)
@@ -330,14 +334,20 @@ class SkilledProposer:
         instructions = list(pred.new_instructions or [])
         summaries = list(getattr(pred, "change_summaries", None) or [])
         proposals: list[Proposal] = []
-        seen = {current_instruction.strip()}
+        parent = current_instruction.strip()
+        seen = {parent}
+        kept = {parent}
         for i, raw in enumerate(instructions):
             text = (raw or "").strip()
             if not text or text in seen:
                 continue
             seen.add(text)
             summary = (summaries[i] if i < len(summaries) else "") or ""
-            proposals.append(Proposal(text=self._enforce_length(text), change_summary=summary.strip()))
+            enforced = self._enforce_length(text)
+            if enforced in kept:
+                continue
+            kept.add(enforced)
+            proposals.append(Proposal(text=enforced, change_summary=summary.strip()))
         if not proposals:
             raise ValueError("the batch proposal returned no usable candidates")
         if len(proposals) < self.candidates:
