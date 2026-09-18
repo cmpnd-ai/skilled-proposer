@@ -124,6 +124,35 @@ Set `journal_path` to keep the journal in a JSON file. The proposer writes it af
 
 The journal is text only. It reads the instruction text GEPA hands back, so it works with any GEPA sampling strategy and with the standalone `gepa` package.
 
+## Batch proposals
+
+Experimental. `candidates=n` makes one reflection call produce n candidate instructions for a component. The candidates condition on each other, and the prompt asks each one to fix the diagnosed failures by a materially different route. The proposer returns the first candidate, keeps the rest, and serves them in order on the following calls that carry the same parent text. When the kept candidates run out, or the parent changes, the next call runs a fresh batch.
+
+Batching pays off only when GEPA asks for several proposals from one parent in one iteration and keeps every one that improves. Pass these engine settings through `gepa_kwargs`, with the sampling strategy's n equal to `candidates`:
+
+```python
+from gepa.strategies.proposal_sampling import SameParentSampling
+from gepa.strategies.proposal_selection import AllImprovements
+
+proposer = SkilledProposer(skills=["./skills/prompt-engineering"], candidates=4)
+
+optimizer = dspy.GEPA(
+    metric=metric,
+    reflection_lm=dspy.LM("openai/gpt-5.6-luna"),
+    instruction_proposer=proposer,
+    reflection_minibatch_size=15,
+    gepa_kwargs={
+        "sampling_strategy": SameParentSampling(4),
+        "selection_strategy": AllImprovements(),
+    },
+    auto="medium",
+)
+```
+
+With the default sampling strategy GEPA evaluates one candidate per iteration and the rest are discarded when the parent changes. With `BestImprovement` GEPA keeps one candidate per iteration and discards the diversity the batch produced. Keep n small so the whole batch fits the reflection model's output limit.
+
+The batch prompt is the standard meta-prompt plus one section that asks for distinct routes, so `base_instructions`, `additional_instructions`, skills, the journal, and the length budget all apply to every candidate.
+
 ## Recommended engine settings
 
 These are GEPA engine settings, passed through `gepa_kwargs`, that pair well with this proposer:
