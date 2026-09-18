@@ -131,3 +131,20 @@ def test_unusable_batch_follows_on_error_policy():
     proposer = SkilledProposer(candidates=2, prompt_model=DummyLM([same]), on_error="raise")
     with pytest.raises(ValueError):
         call(proposer)
+
+
+def test_journal_opens_one_entry_per_served_candidate():
+    lm = batch_lm(["one", "two"], ["three", "four"])
+    proposer = SkilledProposer(candidates=2, journal=True, prompt_model=lm)
+    call(proposer, parent="old")
+    call(proposer, parent="old")
+    entries = proposer.journal.entries
+    assert [(e.iteration, e.proposed_text, e.change_summary) for e in entries] == [
+        (1, "one", "route one"),
+        (2, "two", "route two"),
+    ]
+    call(proposer, parent="two")
+    assert entries[1].accepted is True
+    assert entries[0].accepted is None
+    assert entries[2].proposed_text == "three"
+    assert len(lm.history) == 2
