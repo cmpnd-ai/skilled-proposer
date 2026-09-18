@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from gepa.strategies.proposal_sampling import SameParentSampling
+from gepa.strategies.proposal_sampling import PxNSampling, SameParentSampling
 from gepa.strategies.proposal_selection import AllImprovements
 
 from skilled_proposer import SkilledProposer
@@ -41,9 +41,15 @@ LONG_GUIDANCE = (
     "rules, the output format, and the edge cases the examples reveal."
 )
 
+
 def batched_engine() -> dict[str, Any]:
     """Four proposals from one parent per iteration, keeping every improvement."""
     return {"sampling_strategy": SameParentSampling(4), "selection_strategy": AllImprovements()}
+
+
+def pxn_engine() -> dict[str, Any]:
+    """Two parents with four proposals each per iteration, keeping every improvement."""
+    return {"sampling_strategy": PxNSampling(p=2, n=4), "selection_strategy": AllImprovements()}
 
 
 ABLATIONS: dict[str, Callable[[], Ablation]] = {
@@ -55,6 +61,10 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "journal-long": lambda: Ablation("journal-long", {"journal": True, "additional_instructions": LONG_GUIDANCE}),
     "sameparent": lambda: Ablation("sameparent", {}, batched_engine()),
     "batch": lambda: Ablation("batch", {"candidates": 4}, batched_engine()),
+    "pxn-long": lambda: Ablation("pxn-long", {"additional_instructions": LONG_GUIDANCE}, pxn_engine()),
+    "batch-pxn-long": lambda: Ablation(
+        "batch-pxn-long", {"candidates": 4, "additional_instructions": LONG_GUIDANCE}, pxn_engine()
+    ),
 }
 
 

@@ -77,7 +77,7 @@ from skilled_proposer import SkilledProposer
 def test_ablation_registry_names():
     assert list(ABLATIONS) == [
         "stock", "baseline", "journal", "baseline-long", "baseline-short", "journal-long",
-        "sameparent", "batch",
+        "sameparent", "batch", "pxn-long", "batch-pxn-long",
     ]
     long = ABLATIONS["baseline-long"]()
     short = ABLATIONS["baseline-short"]()
@@ -188,3 +188,20 @@ def test_batch_ablations_share_engine_settings():
         assert kwargs["callbacks"] == []
     assert sameparent.proposer_kwargs == {}
     assert batch.proposer_kwargs == {"candidates": 4}
+
+
+def test_pxn_ablations_share_engine_settings():
+    from gepa.strategies.proposal_sampling import PxNSampling
+    from gepa.strategies.proposal_selection import AllImprovements
+
+    from benchmarks.committee.ablations import LONG_GUIDANCE, resolve
+
+    control, batch = resolve(["pxn-long", "batch-pxn-long"])
+    for ablation in (control, batch):
+        kwargs = ablation.gepa_kwargs(extra_callbacks=[])
+        assert isinstance(kwargs["sampling_strategy"], PxNSampling)
+        assert (kwargs["sampling_strategy"].p, kwargs["sampling_strategy"].n) == (2, 4)
+        assert isinstance(kwargs["selection_strategy"], AllImprovements)
+        assert ablation.proposer_kwargs["additional_instructions"] == LONG_GUIDANCE
+    assert "candidates" not in control.proposer_kwargs
+    assert batch.proposer_kwargs["candidates"] == 4

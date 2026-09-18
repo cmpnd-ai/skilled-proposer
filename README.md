@@ -150,6 +150,8 @@ optimizer = dspy.GEPA(
 )
 ```
 
+`PxNSampling(p, n)` from the same module works the same way, with n equal to `candidates`; each of the p parents gets its own batch. `IndependentSampling` does not pair well, because it can interleave parents and each switch discards the kept candidates.
+
 This pairing needs `component_selector="all"`, or a program with a single predictor. The default round robin selector gives each of the n calls in an iteration a different component. Each component then gets its own batch, and the served candidates do not condition on each other. Candidates after the first are also evaluated on minibatches the reflection model did not see.
 
 With the default sampling strategy GEPA evaluates one candidate per iteration and the rest are discarded when the parent changes. With `BestImprovement` GEPA keeps one candidate per iteration and discards the diversity the batch produced. Keep n small so the whole batch fits the reflection model's output limit.
