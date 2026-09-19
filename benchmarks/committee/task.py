@@ -44,9 +44,30 @@ class SchemaForcedLM(dspy.LM):
         return True
 
 
-def build_student(model: str, api_base: str, api_key: str) -> dspy.LM:
-    return SchemaForcedLM(f"openai/{model}", api_base=api_base, api_key=api_key or "lm-studio")
+def build_student(model: str, api_base: str, api_key: str, **lm_kwargs) -> dspy.LM:
+    return SchemaForcedLM(f"openai/{model}", api_base=api_base, api_key=api_key or "lm-studio", **lm_kwargs)
 
 
 def build_reflection(model: str = DEFAULT_REFLECTION_MODEL) -> dspy.LM:
     return dspy.LM(model)
+
+
+class ReflectionAdapterScope:
+    """Run a proposer under a fixed adapter so a student-only adapter never
+    formats the reflection prompt.
+
+    GEPA sets the reflection LM around each proposer call but keeps the
+    process-wide adapter. When the student needs its own adapter, wrap the
+    proposer in this so reflection keeps the adapter it was tested with.
+    """
+
+    def __init__(self, proposer, adapter):
+        self.proposer = proposer
+        self.adapter = adapter
+
+    def __call__(self, *args, **kwargs):
+        with dspy.context(adapter=self.adapter):
+            return self.proposer(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.proposer, name)

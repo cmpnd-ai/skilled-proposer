@@ -74,3 +74,38 @@ def test_ablations():
     assert "candidates" not in control.proposer_kwargs
     assert batch.proposer_kwargs["candidates"] == 4
     assert control.engine_kwargs.keys() == batch.engine_kwargs.keys() == {"sampling_strategy", "selection_strategy"}
+
+
+def test_reflection_adapter_scope_switches_adapter_only_inside_the_call():
+    from benchmarks.committee.task import ReflectionAdapterScope
+
+    seen = {}
+
+    class Proposer:
+        journal = "marker"
+
+        def __call__(self, **kwargs):
+            seen["adapter"] = type(dspy.settings.adapter).__name__
+            return {"respond": "text"}
+
+    scoped = ReflectionAdapterScope(Proposer(), dspy.XMLAdapter())
+    with dspy.context(adapter=dspy.JSONAdapter()):
+        out = scoped(candidate={}, reflective_dataset={}, components_to_update=["respond"])
+        outside = type(dspy.settings.adapter).__name__
+    assert out == {"respond": "text"}
+    assert seen["adapter"] == "XMLAdapter"
+    assert outside == "JSONAdapter"
+    assert scoped.journal == "marker"
+
+
+def test_run_flags_default_to_xml_adapter_and_no_reasoning_switch():
+    from benchmarks.ifeval.run import build_student_adapter, parse_args
+
+    args = parse_args([])
+    assert args.student_adapter == "xml"
+    assert args.student_reasoning_effort is None
+    assert type(build_student_adapter("xml")).__name__ == "XMLAdapter"
+    assert args.student_max_tokens is None
+    args = parse_args(["--student-adapter", "chat", "--student-reasoning-effort", "none", "--student-max-tokens", "1024"])
+    assert (args.student_adapter, args.student_reasoning_effort, args.student_max_tokens) == ("chat", "none", 1024)
+    assert type(build_student_adapter("chat")).__name__ == "ChatAdapter"

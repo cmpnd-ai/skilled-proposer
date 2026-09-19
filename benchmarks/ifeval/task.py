@@ -12,6 +12,7 @@ from benchmarks.committee.task import (  # noqa: F401  re-exported for run.py
     DEFAULT_REFLECTION_MODEL,
     DEFAULT_STUDENT_API_BASE,
     DEFAULT_STUDENT_MODEL,
+    ReflectionAdapterScope,
     build_reflection,
     build_student,
 )

@@ -28,6 +28,7 @@ from benchmarks.ifeval.task import (
     DEFAULT_REFLECTION_MODEL,
     DEFAULT_STUDENT_API_BASE,
     DEFAULT_STUDENT_MODEL,
+    ReflectionAdapterScope,
     build_program,
     build_reflection,
     build_student,
@@ -45,9 +46,26 @@ def parse_args(argv=None):
     p.add_argument("--student-model", default=os.environ.get("STUDENT_MODEL", DEFAULT_STUDENT_MODEL))
     p.add_argument("--student-api-base", default=os.environ.get("STUDENT_API_BASE", DEFAULT_STUDENT_API_BASE))
     p.add_argument("--reflection-model", default=os.environ.get("REFLECTION_MODEL", DEFAULT_REFLECTION_MODEL))
+    p.add_argument("--student-adapter", choices=["xml", "chat", "qwen"], default="xml",
+                   help="Adapter for the student only. qwen needs `uv pip install dspy-qwen-adapter`. "
+                        "Reflection always uses the XML adapter.")
+    p.add_argument("--student-max-tokens", type=int, default=None,
+                   help="Cap on student output tokens, to stop runaway generations on long-form prompts.")
+    p.add_argument("--student-reasoning-effort", default=None,
+                   help='Passed to the student as reasoning_effort. "none" turns Qwen thinking off in LM Studio.')
     p.add_argument("--out", default="benchmarks/results/ifeval")
     p.add_argument("--dry-run", action="store_true", help="Load data, check the metric, and exit.")
     return p.parse_args(argv)
+
+
+def build_student_adapter(name: str):
+    if name == "qwen":
+        from dspy_qwen_adapter import QwenAdapter
+
+        return QwenAdapter()
+    if name == "chat":
+        return dspy.ChatAdapter()
+    return dspy.XMLAdapter()
 
 
 def selftest_metric() -> None:
@@ -73,6 +91,8 @@ def run_one(ablation: Ablation, seed: int, args, train, val, test, reflection_lm
     run_dir = Path(args.out) / ablation.name / str(seed)
     run_dir.mkdir(parents=True, exist_ok=True)
     proposer = ablation.build_proposer(run_dir)
+    if proposer is not None:
+        proposer = ReflectionAdapterScope(proposer, dspy.XMLAdapter())
     recorder = TrajectoryRecorder()
 
     optimizer = dspy.GEPA(
@@ -97,6 +117,9 @@ def run_one(ablation: Ablation, seed: int, args, train, val, test, reflection_lm
         "seed": seed,
         "split": list(args.split),
         "student_model": args.student_model,
+        "student_adapter": args.student_adapter,
+        "student_reasoning_effort": args.student_reasoning_effort,
+        "student_max_tokens": args.student_max_tokens,
         "reflection_model": args.reflection_model,
         "max_metric_calls": args.max_metric_calls,
         "test_score": evaluate(optimized, test, args.num_threads),
@@ -143,10 +166,18 @@ def main(argv=None) -> None:
         return
 
     dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)
-    student = build_student(args.student_model, args.student_api_base, os.environ.get("STUDENT_API_KEY", ""))
+    lm_kwargs = {}
+    if args.student_reasoning_effort:
+        # litellm forwards extra_body verbatim, which LM Studio needs for this switch.
+        lm_kwargs["extra_body"] = {"reasoning_effort": args.student_reasoning_effort}
+    if args.student_max_tokens:
+        lm_kwargs["max_tokens"] = args.student_max_tokens
+    student = build_student(args.student_model, args.student_api_base, os.environ.get("STUDENT_API_KEY", ""), **lm_kwargs)
     reflection = build_reflection(args.reflection_model)
-    dspy.configure(lm=student, adapter=dspy.XMLAdapter())
-    print(f"[lm] student={args.student_model} reflection={args.reflection_model}")
+    dspy.configure(lm=student, adapter=build_student_adapter(args.student_adapter))
+    print(f"[lm] student={args.student_model} adapter={args.student_adapter} "
+          f"reasoning_effort={args.student_reasoning_effort} max_tokens={args.student_max_tokens} "
+          f"reflection={args.reflection_model}")
     tracing = configure_tracing()
 
     probe = reflection("Reply with the single word ready.")
