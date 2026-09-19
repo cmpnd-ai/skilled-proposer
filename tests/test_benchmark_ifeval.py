@@ -109,3 +109,15 @@ def test_run_flags_default_to_xml_adapter_and_no_reasoning_switch():
     args = parse_args(["--student-adapter", "chat", "--student-reasoning-effort", "none", "--student-max-tokens", "1024"])
     assert (args.student_adapter, args.student_reasoning_effort, args.student_max_tokens) == ("chat", "none", 1024)
     assert type(build_student_adapter("chat")).__name__ == "ChatAdapter"
+
+
+def test_program_salvages_unparseable_student_output():
+    from dspy.utils.exceptions import AdapterParseError
+
+    program = build_program()
+
+    def unparseable(**kwargs):
+        raise AdapterParseError("ChatAdapter", Respond, "plain answer with no markers")
+
+    program.respond = unparseable
+    assert program(prompt="anything").response == "plain answer with no markers"

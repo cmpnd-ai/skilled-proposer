@@ -7,6 +7,7 @@ task, so both benchmarks talk to the same LM Studio and reflection setup.
 from __future__ import annotations
 
 import dspy
+from dspy.utils.exceptions import AdapterParseError
 
 from benchmarks.committee.task import (  # noqa: F401  re-exported for run.py
     DEFAULT_REFLECTION_MODEL,
@@ -31,7 +32,13 @@ class RespondProgram(dspy.Module):
         self.respond = dspy.Predict(Respond)
 
     def forward(self, prompt):
-        return self.respond(prompt=prompt)
+        try:
+            return self.respond(prompt=prompt)
+        except AdapterParseError as e:
+            # The student answered without the adapter's field markers. Score
+            # that text as the response rather than dropping the example, which
+            # leaves GEPA's valset bookkeeping one output short and crashes it.
+            return dspy.Prediction(response=(e.lm_response or "").strip())
 
 
 def build_program() -> dspy.Module:
