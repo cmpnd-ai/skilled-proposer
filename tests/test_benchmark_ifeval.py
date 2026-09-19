@@ -121,3 +121,22 @@ def test_program_salvages_unparseable_student_output():
 
     program.respond = unparseable
     assert program(prompt="anything").response == "plain answer with no markers"
+
+
+def test_program_scores_context_overflow_as_empty_and_reraises_other_errors():
+    import pytest
+
+    program = build_program()
+
+    def overflow(**kwargs):
+        raise RuntimeError('Error code: 400 - {"message": "Context size has been exceeded."}')
+
+    program.respond = overflow
+    assert program(prompt="anything").response == ""
+
+    def dead_key(**kwargs):
+        raise RuntimeError("AuthenticationError: invalid api key")
+
+    program.respond = dead_key
+    with pytest.raises(RuntimeError):
+        program(prompt="anything")

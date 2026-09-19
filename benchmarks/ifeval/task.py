@@ -39,6 +39,12 @@ class RespondProgram(dspy.Module):
             # that text as the response rather than dropping the example, which
             # leaves GEPA's valset bookkeeping one output short and crashes it.
             return dspy.Prediction(response=(e.lm_response or "").strip())
+        except Exception as e:
+            # A request too long for the server's per-slot context is a failure
+            # of that one example, not of the run. Anything else stays loud.
+            if "context" in str(e).lower():
+                return dspy.Prediction(response="")
+            raise
 
 
 def build_program() -> dspy.Module:
