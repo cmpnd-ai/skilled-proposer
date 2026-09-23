@@ -255,6 +255,9 @@ def _read_react(text: str, obs: int, cap: int) -> str | None:
             break
         pos = end + 2 + len(style.opener.format(next_key))
         key = next_key
+    # ReAct writes every step with a tool name, so text without one is not a trajectory.
+    if not any(k.startswith("tool_name_") for k in values):
+        return None
 
     steps: dict[int, _Step] = {}
     for key, value in values.items():

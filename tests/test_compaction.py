@@ -385,3 +385,9 @@ def test_proposer_logs_dropped_examples(caplog):
         propose(proposer, [page_example(i) for i in range(3)])
     assert "Compacted examples for component 'react'" in caplog.text
     assert "dropped the last" in caplog.text
+
+
+@pytest.mark.parametrize("text", ["thought_0: " + "log line\n" * 20000, "<thought_1>\n" + "x" * 50000])
+def test_long_text_that_starts_like_a_trajectory_but_has_no_tool_call_is_capped(text):
+    [out], _ = compact([example(doc=text)], Compaction(max_field_chars=100))
+    assert out["Inputs"]["doc"] == text[:100] + f" [{len(text) - 100:,} of {len(text):,} characters cut]"
