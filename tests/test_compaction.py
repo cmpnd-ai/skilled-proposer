@@ -273,3 +273,24 @@ def test_history_message_with_a_raw_newline_stays_in_its_step():
     assert rendered.startswith("Trajectory: 3 steps,")
     assert "Step 2\n  message: Weird(\n    multi-line)" in rendered
     assert "Step 3\n  thought: c" in rendered
+
+
+# -- dspy.RLM -----------------------------------------------------------------
+
+def test_rlm_history_renders_what_the_student_saw():
+    history = (
+        REPLHistory(max_output_chars=1000)
+        .append(reasoning="Check the length.", code="print(len(doc))", output="120000")
+        .append(reasoning="Read it.", code="print(doc)", output="A" * 3000 + "THE END")
+    )
+    [out], _ = compact([{"Inputs": {"repl_history": str(history)}}])
+    rendered = out["Inputs"]["repl_history"]
+
+    assert rendered == history.format()
+    assert "THE END" in rendered
+    assert "Output (3,007 chars)" in rendered
+
+
+def test_rlm_empty_history_renders_the_student_message():
+    [out], _ = compact([{"Inputs": {"repl_history": str(REPLHistory())}}])
+    assert out["Inputs"]["repl_history"] == REPLHistory().format()

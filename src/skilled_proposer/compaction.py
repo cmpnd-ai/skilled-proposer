@@ -92,7 +92,7 @@ def _compact_example(example: Mapping[str, Any], obs: int, cap: int) -> dict[str
 def _compact_value(value: Any, obs: int, cap: int) -> Any:
     if not isinstance(value, str):
         return value
-    for reader in (_read_react, _read_history):
+    for reader in (_read_react, _read_history, _read_rlm):
         rendered = reader(value, obs, cap)
         if rendered is not None:
             return rendered
@@ -352,3 +352,31 @@ def _keywords(node: ast.AST | None) -> dict[str, ast.AST]:
 
 def _elements(node: ast.AST | None) -> list[ast.AST]:
     return list(node.elts) if isinstance(node, (ast.List, ast.Tuple)) else []
+
+
+# --------------------------------------------------------------------------- #
+# dspy.RLM: str(REPLHistory)
+# --------------------------------------------------------------------------- #
+
+_RLM_PREFIX = "entries=["
+_RLM_LIMIT = " max_output_chars="
+
+
+def _read_rlm(text: str, obs: int, cap: int) -> str | None:
+    if not text.startswith(_RLM_PREFIX) or _RLM_LIMIT not in text:
+        return None
+    head, _, limit = text.rpartition(_RLM_LIMIT)
+    try:
+        from dspy.primitives.repl_types import REPLEntry, REPLHistory
+
+        node = ast.parse(f"f({head}, max_output_chars={limit})", mode="eval").body
+        kwargs = _keywords(node)
+        entries = []
+        for entry_node in _elements(kwargs.get("entries")):
+            if _call_name(entry_node) != "REPLEntry":
+                return None
+            entries.append(REPLEntry(**{k: ast.literal_eval(v) for k, v in _keywords(entry_node).items()}))
+        history = REPLHistory(entries=entries, max_output_chars=ast.literal_eval(kwargs["max_output_chars"]))
+    except Exception:
+        return None
+    return history.format()
