@@ -92,6 +92,10 @@ def _compact_example(example: Mapping[str, Any], obs: int, cap: int) -> dict[str
 def _compact_value(value: Any, obs: int, cap: int) -> Any:
     if not isinstance(value, str):
         return value
+    for reader in (_read_react,):
+        rendered = reader(value, obs, cap)
+        if rendered is not None:
+            return rendered
     return _head(value, cap)
 
 
@@ -113,3 +117,138 @@ def _head(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]} [{len(text) - limit:,} of {len(text):,} characters cut]"
+
+
+# --------------------------------------------------------------------------- #
+# Steps and rendering
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class _Call:
+    name: str
+    args: Any
+    result: str | None = None
+    is_error: bool = False
+
+
+@dataclass
+class _Step:
+    number: int
+    thought: str = ""
+    calls: list[_Call] | None = None
+    fields: dict[str, str] | None = None
+
+
+def _render_steps(steps: list[_Step], obs: int, cap: int) -> str:
+    cut = 0
+    blocks = []
+    for step in steps:
+        lines = [f"Step {step.number}"]
+        for k, v in (step.fields or {}).items():
+            lines.append(_line(k, _head(v, cap)))
+        if step.thought:
+            lines.append(_line("thought", step.thought))
+        for call in step.calls or []:
+            lines.append(_line("call", _format_call(call.name, call.args)))
+            if call.result is not None:
+                cut += max(0, len(call.result) - obs)
+                label = "error" if call.is_error else "result"
+                lines.append(_line(label, _head(call.result, obs)))
+        blocks.append("\n".join(lines))
+    noun = "step" if len(steps) == 1 else "steps"
+    header = f"Trajectory: {len(steps)} {noun}, {cut:,} characters cut from tool results."
+    return "\n\n".join([header] + blocks)
+
+
+def _line(label: str, text: str) -> str:
+    return f"  {label}: " + text.replace("\n", "\n    ")
+
+
+def _format_call(name: str, args: Any) -> str:
+    if isinstance(args, Mapping):
+        inner = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False, default=str)}" for k, v in args.items())
+        return f"{name}({inner})"
+    return f"{name}({args})" if args not in (None, "") else f"{name}()"
+
+
+# --------------------------------------------------------------------------- #
+# dspy.ReAct: the adapter's user message format
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class _Style:
+    first: re.Pattern
+    opener: str
+    closer: str = ""
+
+
+_STYLES = (
+    _Style(re.compile(r"\[\[ ## thought_(\d+) ## \]\]\n"), "[[ ## {} ## ]]\n"),
+    _Style(re.compile(r"<thought_(\d+)>\n"), "<{}>\n", "\n</{}>"),
+    _Style(re.compile(r"thought_(\d+): "), "{}: "),
+)
+
+_REACT_ORDER = ("thought", "tool_name", "tool_args", "observation")
+
+
+def _react_next(key: str) -> list[str]:
+    part, _, index = key.rpartition("_")
+    n = int(index)
+    if part == "tool_args":
+        return [f"observation_{n}", f"thought_{n + 1}"]
+    if part == "observation":
+        return [f"thought_{n + 1}"]
+    return [f"{_REACT_ORDER[_REACT_ORDER.index(part) + 1]}_{n}"]
+
+
+def _read_react(text: str, obs: int, cap: int) -> str | None:
+    for style in _STYLES:
+        match = style.first.match(text)
+        if match:
+            break
+    else:
+        return None
+
+    values: dict[str, str] = {}
+    key = f"thought_{match.group(1)}"
+    pos = match.end()
+    while True:
+        end, next_key = len(text), None
+        for candidate in _react_next(key):
+            i = text.find("\n\n" + style.opener.format(candidate), pos)
+            if i != -1:
+                end, next_key = i, candidate
+                break
+        value = text[pos:end]
+        closer = style.closer.format(key)
+        if closer and value.endswith(closer):
+            value = value[: -len(closer)]
+        values[key] = value
+        if next_key is None:
+            break
+        pos = end + 2 + len(style.opener.format(next_key))
+        key = next_key
+
+    steps: dict[int, _Step] = {}
+    for key, value in values.items():
+        part, _, index = key.rpartition("_")
+        n = int(index)
+        step = steps.setdefault(n, _Step(number=n + 1, calls=[]))
+        if part == "thought":
+            step.thought = value
+        elif part == "tool_name":
+            step.calls.append(_Call(name=value, args=None))
+        elif part == "tool_args" and step.calls:
+            step.calls[-1].args = _parse_args(value)
+        elif part == "observation" and step.calls:
+            step.calls[-1].result = value
+    return _render_steps(list(steps.values()), obs, cap)
+
+
+def _parse_args(text: str) -> Any:
+    for parse in (json.loads, ast.literal_eval):
+        try:
+            return parse(text)
+        except (ValueError, SyntaxError, TypeError):
+            continue
+    return text
