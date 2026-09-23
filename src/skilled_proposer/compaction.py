@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
+_OBSERVATION_FLOOR = 100
+_FIELD_FLOOR = 200
 _DEDUPE_MIN_CHARS = 200
 _COMPACTED_KEYS = ("Inputs", "Generated Outputs")
 
@@ -59,15 +61,40 @@ def compact_examples(
     render: Callable[[Sequence[Mapping[str, Any]]], str],
     count_tokens: Callable[[str], int],
 ) -> tuple[list[dict[str, Any]], CompactionStats]:
-    """Return compacted copies of ``examples`` and stats about the pass."""
-    out = _compact_all(examples, config.observation_chars, config.max_field_chars)
+    """Return compacted copies of ``examples`` and stats about the pass.
+
+    With a token budget, the caps halve down to their floors first, then
+    trailing examples drop until the rendered block fits or one remains.
+    """
+    obs, cap = config.observation_chars, config.max_field_chars
+    kept = list(examples)
+    out = _compact_all(kept, obs, cap)
+    tokens = None
+    budget = config.examples_token_budget
+    if budget is not None:
+        tokens = count_tokens(render(out))
+        while tokens > budget and (obs > _OBSERVATION_FLOOR or cap > _FIELD_FLOOR):
+            obs = _halve(obs, _OBSERVATION_FLOOR)
+            cap = _halve(cap, _FIELD_FLOOR)
+            out = _compact_all(kept, obs, cap)
+            tokens = count_tokens(render(out))
+        while tokens > budget and len(kept) > 1:
+            kept = kept[:-1]
+            out = _compact_all(kept, obs, cap)
+            tokens = count_tokens(render(out))
     stats = CompactionStats(
-        examples_kept=len(out),
-        examples_dropped=0,
+        examples_kept=len(kept),
+        examples_dropped=len(examples) - len(kept),
         chars_before=len(render(examples)),
         chars_after=len(render(out)),
+        tokens=tokens,
+        over_budget=budget is not None and tokens > budget,
     )
     return out, stats
+
+
+def _halve(value: int, floor: int) -> int:
+    return min(value, max(floor, value // 2))
 
 
 def _compact_all(examples: Sequence[Mapping[str, Any]], obs: int, cap: int) -> list[dict[str, Any]]:

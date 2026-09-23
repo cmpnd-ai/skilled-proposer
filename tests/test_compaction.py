@@ -294,3 +294,33 @@ def test_rlm_history_renders_what_the_student_saw():
 def test_rlm_empty_history_renders_the_student_message():
     [out], _ = compact([{"Inputs": {"repl_history": str(REPLHistory())}}])
     assert out["Inputs"]["repl_history"] == REPLHistory().format()
+
+
+# -- Token budget -------------------------------------------------------------
+
+def page_example(i):
+    steps = [("Read.", "fetch_page", {"url": f"site{i}.com"}, PAGE)]
+    return example(q=f"q{i}", trajectory=react_trajectory(dspy.ChatAdapter(), steps))
+
+
+def test_budget_shrinks_caps_before_dropping_examples():
+    examples = [page_example(i) for i in range(3)]
+    out, stats = compact(examples, Compaction(examples_token_budget=2200), count_tokens=len)
+    assert stats.examples_kept == 3 and stats.examples_dropped == 0
+    assert stats.tokens <= 2200
+    assert "[47," in out[0]["Inputs"]["trajectory"]
+
+
+def test_budget_drops_trailing_examples_after_caps_reach_floors():
+    examples = [page_example(i) for i in range(3)]
+    out, stats = compact(examples, Compaction(examples_token_budget=1000), count_tokens=len)
+    assert stats.examples_dropped >= 1
+    assert [e["Inputs"]["q"] for e in out] == [f"q{i}" for i in range(stats.examples_kept)]
+    assert not stats.over_budget
+
+
+def test_budget_keeps_one_example_when_nothing_fits():
+    examples = [page_example(i) for i in range(3)]
+    out, stats = compact(examples, Compaction(examples_token_budget=10), count_tokens=len)
+    assert len(out) == 1 and out[0]["Inputs"]["q"] == "q0"
+    assert stats.over_budget
