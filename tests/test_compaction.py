@@ -324,3 +324,64 @@ def test_budget_keeps_one_example_when_nothing_fits():
     out, stats = compact(examples, Compaction(examples_token_budget=10), count_tokens=len)
     assert len(out) == 1 and out[0]["Inputs"]["q"] == "q0"
     assert stats.over_budget
+
+
+# -- SkilledProposer ----------------------------------------------------------
+
+def test_proposer_compaction_flag():
+    from skilled_proposer import SkilledProposer
+
+    assert SkilledProposer().compaction is None
+    assert SkilledProposer(compaction=True).compaction == Compaction()
+    custom = Compaction(observation_chars=50)
+    assert SkilledProposer(compaction=custom).compaction is custom
+    with pytest.raises(TypeError):
+        SkilledProposer(compaction={"observation_chars": 50})
+
+
+def propose(proposer, examples):
+    reflection = DummyLM([{"new_instruction": "Better."}] * 3)
+    with dspy.context(lm=reflection):
+        result = proposer({"react": "Old."}, {"react": examples}, ["react"])
+    return result, reflection.history[-1]["messages"][-1]["content"]
+
+
+def test_proposer_sends_compacted_examples():
+    from skilled_proposer import SkilledProposer
+
+    examples = [page_example(0)]
+    result, prompt = propose(SkilledProposer(compaction=True), examples)
+    assert result == {"react": "Better."}
+    assert "Trajectory: 1 step," in prompt
+    assert PAGE not in prompt
+    assert PAGE in examples[0]["Inputs"]["trajectory"]
+
+
+def test_proposer_without_compaction_sends_full_examples():
+    from skilled_proposer import SkilledProposer
+
+    _, prompt = propose(SkilledProposer(), [page_example(0)])
+    assert PAGE in prompt
+
+
+def test_proposer_falls_back_when_compaction_fails(monkeypatch, caplog):
+    from skilled_proposer import SkilledProposer, proposer as proposer_module
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("reader bug")
+
+    monkeypatch.setattr(proposer_module, "compact_examples", boom)
+    result, prompt = propose(SkilledProposer(compaction=True), [page_example(0)])
+    assert result == {"react": "Better."}
+    assert PAGE in prompt
+    assert "Compaction failed for component 'react'" in caplog.text
+
+
+def test_proposer_logs_dropped_examples(caplog):
+    from skilled_proposer import SkilledProposer
+
+    proposer = SkilledProposer(compaction=Compaction(examples_token_budget=300))
+    with caplog.at_level("INFO", logger="skilled_proposer.proposer"):
+        propose(proposer, [page_example(i) for i in range(3)])
+    assert "Compacted examples for component 'react'" in caplog.text
+    assert "dropped the last" in caplog.text

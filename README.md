@@ -89,6 +89,7 @@ SkilledProposer(
     journal_path=None,             # JSON file for the journal
     journal_entries=12,            # entries shown to the reflection model
     distill_every=5,               # entries between lesson distillations
+    compaction=False,              # shorten agent histories, see below
 )
 ```
 
@@ -123,6 +124,32 @@ Every `distill_every` closed entries, the proposer asks the reflection model to 
 Set `journal_path` to keep the journal in a JSON file. The proposer writes it after every proposal and loads it when the file exists, so a run resumed from GEPA's `log_dir` keeps its record. The file is also the easiest way to read what the reflection model tried and what it learned.
 
 The journal is text only. It reads the instruction text GEPA hands back, so it works with any GEPA sampling strategy and with the standalone `gepa` package.
+
+## Agent programs
+
+Experimental. An agent built on `dspy.ReAct`, `dspy.ReActV2`, or `dspy.RLM` collects a long history on each run. DSPy puts that history into the reflective examples, so most of the proposal prompt can be the text of pages the agent fetched. Set `compaction=True` to shorten the examples before the proposer renders them.
+
+```python
+from skilled_proposer import Compaction, SkilledProposer
+
+proposer = SkilledProposer(compaction=True)
+proposer = SkilledProposer(
+    compaction=Compaction(observation_chars=1000, examples_token_budget=60_000)
+)
+```
+
+With compaction on, the proposer renders each history as numbered steps.
+
+- Thoughts, tool names, tool arguments, and code are kept in full.
+- Each tool result keeps its first `observation_chars` characters, 500 by default. A marker says how many characters were cut.
+- RLM outputs keep the head and tail view that the agent saw.
+- Any other string field longer than `max_field_chars`, 2,000 by default, keeps its head.
+- A long input that repeats across examples, e.g., the ReActV2 tool list, is written once.
+- Feedback is never cut.
+
+`examples_token_budget` limits the tokens in the rendered examples for one proposal call. The skills, the journal, and the current instruction are outside the budget. When the examples are over the budget, the proposer halves the caps, then drops examples from the end until they fit. The proposer logs what it kept and dropped.
+
+For `dspy.ReAct` and `dspy.RLM`, DSPy picks one step of each run at random for the reflective example, and the example holds the history up to that step. The reflection model can therefore miss the step where the agent went wrong. Compaction cannot add steps that DSPy did not pass.
 
 ## Recommended engine settings
 
