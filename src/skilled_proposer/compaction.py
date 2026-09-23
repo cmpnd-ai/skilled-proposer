@@ -92,7 +92,7 @@ def _compact_example(example: Mapping[str, Any], obs: int, cap: int) -> dict[str
 def _compact_value(value: Any, obs: int, cap: int) -> Any:
     if not isinstance(value, str):
         return value
-    for reader in (_read_react,):
+    for reader in (_read_react, _read_history):
         rendered = reader(value, obs, cap)
         if rendered is not None:
             return rendered
@@ -252,3 +252,103 @@ def _parse_args(text: str) -> Any:
         except (ValueError, SyntaxError, TypeError):
             continue
     return text
+
+
+# --------------------------------------------------------------------------- #
+# dspy.History (dspy.ReActV2): the Context block from make_reflective_dataset
+# --------------------------------------------------------------------------- #
+
+_HISTORY_PREFIX = "```json\n  0: "
+_HISTORY_SUFFIX = "\n```"
+
+
+def _read_history(text: str, obs: int, cap: int) -> str | None:
+    if not (text.startswith(_HISTORY_PREFIX) and text.endswith(_HISTORY_SUFFIX)):
+        return None
+    body = text[len("```json\n") : -len(_HISTORY_SUFFIX)]
+    lines = []
+    pos, i = len("  0: "), 0
+    while True:
+        marker = f"\n  {i + 1}: "
+        end = body.find(marker, pos)
+        lines.append(body[pos : end if end != -1 else len(body)])
+        if end == -1:
+            break
+        pos, i = end + len(marker), i + 1
+    return _render_steps([_history_step(n, line) for n, line in enumerate(lines, 1)], obs, cap)
+
+
+def _history_step(number: int, line: str) -> _Step:
+    step = _Step(number=number, calls=[], fields={})
+    try:
+        node = ast.parse(line, mode="eval").body
+    except SyntaxError:
+        node = None
+    if not isinstance(node, ast.Dict):
+        step.fields["message"] = line
+        return step
+    for key_node, value_node in zip(node.keys, node.values):
+        key = _literal(key_node) if key_node is not None else "**"
+        if key == "next_thought":
+            step.thought = str(_literal(value_node))
+        elif key == "tool_calls" and _call_name(value_node) == "ToolCalls":
+            step.calls = _tool_calls(value_node)
+        else:
+            value = _literal(value_node)
+            step.fields[str(key)] = value if isinstance(value, str) else repr(value)
+    return step
+
+
+def _tool_calls(node: ast.Call) -> list[_Call]:
+    kwargs = _keywords(node)
+    calls: dict[str, _Call] = {}
+    order: list[_Call] = []
+    for call_node in _elements(kwargs.get("tool_calls")):
+        kw = {k: _literal(v) for k, v in _keywords(call_node).items()}
+        call = _Call(name=str(kw.get("name", "")), args=kw.get("args"))
+        calls[str(kw.get("id"))] = call
+        order.append(call)
+    results = kwargs.get("tool_call_results")
+    if _call_name(results) == "ToolCallResults":
+        for result_node in _elements(_keywords(results).get("tool_call_results")):
+            kw = {k: _literal(v) for k, v in _keywords(result_node).items()}
+            call = calls.get(str(kw.get("call_id")))
+            if call is None:
+                call = _Call(name=str(kw.get("name", "")), args=None)
+                order.append(call)
+            value = kw.get("value")
+            call.result = value if isinstance(value, str) else repr(value)
+            call.is_error = bool(kw.get("is_error"))
+    return order
+
+
+def _literal(node: ast.AST | None) -> Any:
+    if node is None:
+        return None
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, SyntaxError, TypeError):
+        return _Raw(ast.unparse(node))
+
+
+class _Raw(str):
+    """Source text for a node that is not a literal. Renders without quotes."""
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+def _call_name(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id
+    return None
+
+
+def _keywords(node: ast.AST | None) -> dict[str, ast.AST]:
+    if not isinstance(node, ast.Call):
+        return {}
+    return {kw.arg: kw.value for kw in node.keywords if kw.arg is not None}
+
+
+def _elements(node: ast.AST | None) -> list[ast.AST]:
+    return list(node.elts) if isinstance(node, (ast.List, ast.Tuple)) else []

@@ -178,3 +178,98 @@ def test_non_ascii_args_and_results_render_unescaped():
     rendered = out["Inputs"]["trajectory"]
     assert 'web_search(query="tendencias en España")' in rendered
     assert "café ☕" in rendered
+
+
+# -- dspy.ReActV2 (dspy.History) ---------------------------------------------
+
+def history_context(messages):
+    """Format a dspy.History the way make_reflective_dataset writes Context."""
+    s = "```json\n"
+    for i, message in enumerate(messages):
+        s += f"  {i}: {message}\n"
+    s += "```"
+    return s
+
+
+def tool_calls(*calls, results=None):
+    tc = ToolCalls(tool_calls=[
+        ToolCalls.ToolCall(name=name, args=args, id=f"call_{i}") for i, (name, args) in enumerate(calls)
+    ])
+    if results is not None:
+        values = [value for value, _ in results]
+        errors = [is_error for _, is_error in results]
+        tcr = ToolCallResults.from_tool_calls_and_values(tc, values, errors)
+        tc = tc.model_copy(update={"tool_call_results": tcr})
+    return tc
+
+
+def test_history_renders_turns_with_parallel_calls_and_errors():
+    messages = [
+        {
+            "question": "What is trending in X?",
+            "next_thought": "Search twice.",
+            "tool_calls": tool_calls(
+                ("web_search", {"query": "X trends"}),
+                ("fetch_page", {"url": "example.com/2022"}),
+                results=[("1. X surges in 2025", False), (PAGE, False)],
+            ),
+        },
+        {
+            "next_thought": "Try the other page.",
+            "tool_calls": tool_calls(("fetch_page", {"url": "bad"}), results=[("Execution error in fetch_page: 404", True)]),
+        },
+        {
+            "next_thought": "Answer.",
+            "tool_calls": tool_calls(("submit", {"answer": "flat"}), results=[({"answer": "flat"}, False)]),
+            "answer": "flat",
+        },
+    ]
+    [out], _ = compact([{"Inputs": {"Context": history_context(messages)}, "Feedback": "f"}])
+    rendered = out["Inputs"]["Context"]
+
+    assert rendered.startswith("Trajectory: 3 steps,")
+    assert "Step 1\n  question: What is trending in X?\n  thought: Search twice." in rendered
+    assert '  call: web_search(query="X trends")\n  result: 1. X surges in 2025' in rendered
+    assert f"of {len(PAGE):,} characters cut]" in rendered
+    assert "  error: Execution error in fetch_page: 404" in rendered
+    assert '  call: submit(answer="flat")' in rendered
+    assert len(rendered) < 3000
+
+
+def test_history_line_that_fails_to_parse_keeps_its_text_and_others_parse():
+    good = {"next_thought": "Look.", "tool_calls": tool_calls(("fetch_page", {"url": "a.com"}), results=[("ok", False)])}
+    text = history_context([good, "<Foo object at 0x1234> " + "z" * 5000])
+    [out], _ = compact([{"Inputs": {"Context": text}}])
+    rendered = out["Inputs"]["Context"]
+
+    assert '  call: fetch_page(url="a.com")' in rendered
+    assert "Step 2\n  message: <Foo object at 0x1234>" in rendered
+    assert "of 5,023 characters cut]" in rendered
+
+
+def test_history_tool_result_that_is_not_a_literal_renders_as_source():
+    tc = tool_calls(("fetch_page", {"url": "a.com"}))
+    line = {"next_thought": "Look.", "tool_calls": tc}
+    text = history_context([line]).replace(
+        "tool_call_results=None",
+        "tool_call_results=ToolCallResults(tool_call_results=[ToolCallResult(call_id='call_0', "
+        "name='fetch_page', value=Page(url='a.com'), is_error=False)])",
+    )
+    [out], _ = compact([{"Inputs": {"Context": text}}])
+    assert "  result: Page(url='a.com')" in out["Inputs"]["Context"]
+
+def test_history_from_a_chat_program_renders_each_message():
+    messages = [{"question": "Hi?", "answer": "Hello."}, {"question": "More?", "answer": "a" * 5000}]
+    [out], _ = compact([{"Inputs": {"Context": history_context(messages)}}], Compaction(max_field_chars=100))
+    rendered = out["Inputs"]["Context"]
+    assert "Step 1\n  question: Hi?\n  answer: Hello." in rendered
+    assert "[4,900 of 5,000 characters cut]" in rendered
+
+
+def test_history_message_with_a_raw_newline_stays_in_its_step():
+    text = history_context([{"next_thought": "a"}, "Weird(\nmulti-line)", {"next_thought": "c"}])
+    [out], _ = compact([{"Inputs": {"Context": text}}])
+    rendered = out["Inputs"]["Context"]
+    assert rendered.startswith("Trajectory: 3 steps,")
+    assert "Step 2\n  message: Weird(\n    multi-line)" in rendered
+    assert "Step 3\n  thought: c" in rendered
