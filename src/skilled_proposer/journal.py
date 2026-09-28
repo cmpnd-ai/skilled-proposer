@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 _WORD_RE = re.compile(r"\S+")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,6 +23,11 @@ class JournalEntry:
     accepted: bool | None = None
     reason: str = ""
     closed: bool = False
+    analysis: str = ""
+
+    @property
+    def entry_id(self) -> str:
+        return f"{self.iteration}:{self.component}"
 
     @property
     def verdict(self) -> str:
@@ -41,10 +49,12 @@ class Journal:
         entries: list[JournalEntry] | None = None,
         lessons: str = "",
         closed_since_distill: int = 0,
+        hypotheses: list[str] | None = None,
     ):
         self.entries: list[JournalEntry] = list(entries or [])
         self.lessons = lessons
         self.closed_since_distill = closed_since_distill
+        self.hypotheses: list[str] = list(hypotheses or [])
 
     # -- Entries ------------------------------------------------------------
 
@@ -62,16 +72,55 @@ class Journal:
         self.closed_since_distill += closed
         return closed
 
+    # -- RLM notes ----------------------------------------------------------
+
+    def to_data(self) -> dict:
+        """The journal as JSON data for the RLM sandbox."""
+        return {
+            "lessons": [line for line in self.lessons.splitlines() if line.strip()],
+            "hypotheses": list(self.hypotheses),
+            "entries": [
+                {
+                    "id": e.entry_id,
+                    "iteration": e.iteration,
+                    "component": e.component,
+                    "verdict": e.verdict,
+                    "reason": e.reason,
+                    "change_summary": e.change_summary,
+                    "analysis": e.analysis,
+                    "parent_text": e.parent_text,
+                    "proposed_text": e.proposed_text,
+                }
+                for e in self.entries
+            ],
+        }
+
+    def apply_notes(
+        self, lessons: list[str], hypotheses: list[str], entry_analysis: dict[str, str]
+    ) -> None:
+        """Merge the RLM's notes. The facts about each entry never change."""
+        self.lessons = "\n".join(line.strip() for line in lessons if line.strip())
+        self.hypotheses = [h.strip() for h in hypotheses if h.strip()]
+        by_id = {e.entry_id: e for e in self.entries}
+        for entry_id, analysis in entry_analysis.items():
+            entry = by_id.get(entry_id)
+            if entry is None:
+                logger.warning("Journal notes named an unknown entry %r; dropping its analysis.", entry_id)
+                continue
+            entry.analysis = analysis.strip()
+
     # -- Rendering ----------------------------------------------------------
 
     def render(self, limit: int | None = None) -> str:
         lessons = self.lessons.strip()
         entries = self.entries[-limit:] if limit else self.entries
-        if not lessons and not entries:
+        if not lessons and not self.hypotheses and not entries:
             return "No proposals have been recorded yet."
         parts = []
         if lessons:
             parts.append("## Lessons\n\n" + lessons)
+        if self.hypotheses:
+            parts.append("## Hypotheses\n\n" + "\n".join(self.hypotheses))
         if entries:
             blocks = "\n\n".join(_render_entry(e) for e in entries)
             parts.append("## Recent proposals\n\n" + blocks)
@@ -84,6 +133,7 @@ class Journal:
             {
                 "lessons": self.lessons,
                 "closed_since_distill": self.closed_since_distill,
+                "hypotheses": self.hypotheses,
                 "entries": [asdict(e) for e in self.entries],
             },
             indent=2,
@@ -100,6 +150,7 @@ class Journal:
             entries=entries,
             lessons=data.get("lessons", ""),
             closed_since_distill=data.get("closed_since_distill", 0),
+            hypotheses=data.get("hypotheses", []),
         )
 
     def save(self, path: str | Path) -> None:
@@ -119,6 +170,8 @@ def _render_entry(e: JournalEntry) -> str:
     lines.append(_size_line(e))
     if e.reason:
         lines.append(f"Reason: {e.reason}")
+    if e.analysis:
+        lines.append(f"Analysis: {e.analysis}")
     return "\n".join(lines)
 
 

@@ -222,3 +222,56 @@ def test_bad_journal_path_logs_and_continues(tmp_path, caplog):
     with caplog.at_level("WARNING"):
         assert propose(proposer, "seed") == {"p": "a"}
     assert any("Failed to save the journal" in r.message for r in caplog.records)
+
+
+def test_entry_id_and_to_data():
+    j = Journal(lessons="Keep rules short.\n\nPrefer one rule.", hypotheses=["Maybe X."])
+    j.open(entry(iteration=2, component="p", accepted=True, reason="Chosen."))
+    data = j.to_data()
+    assert data["lessons"] == ["Keep rules short.", "Prefer one rule."]
+    assert data["hypotheses"] == ["Maybe X."]
+    [e] = data["entries"]
+    assert e["id"] == "2:p" == j.entries[0].entry_id
+    assert e["verdict"] == "accepted"
+    assert set(e) == {"id", "iteration", "component", "verdict", "reason", "change_summary",
+                      "analysis", "parent_text", "proposed_text"}
+
+
+def test_apply_notes_updates_only_notes(caplog):
+    j = Journal(lessons="old")
+    j.open(entry(iteration=1, component="p", accepted=True, reason="Chosen."))
+    j.close(1)
+    j.apply_notes(["Short rules win.", "  "], ["Maybe X."],
+                  {"1:p": "Kept: fixed the format.", "9:p": "nope"})
+    assert j.lessons == "Short rules win."
+    assert j.hypotheses == ["Maybe X."]
+    e = j.entries[0]
+    assert e.analysis == "Kept: fixed the format."
+    assert (e.iteration, e.component, e.parent_text, e.proposed_text, e.accepted, e.reason, e.closed) == (
+        1, "p", "old text", "new text", True, "Chosen.", True)
+    assert "9:p" in caplog.text
+
+
+def test_render_shows_hypotheses_and_analysis():
+    j = Journal(lessons="L", hypotheses=["H1"])
+    j.open(entry(analysis="Kept: fixed the format."))
+    text = j.render()
+    assert text.index("## Lessons") < text.index("## Hypotheses") < text.index("## Recent proposals")
+    assert "H1" in text
+    assert "Analysis: Kept: fixed the format." in text
+
+
+def test_json_round_trip_keeps_notes():
+    j = Journal(hypotheses=["H"])
+    j.open(entry(analysis="A"))
+    back = Journal.from_json(j.to_json())
+    assert back.hypotheses == ["H"]
+    assert back.entries[0].analysis == "A"
+
+
+def test_older_journal_file_without_notes_loads():
+    text = json.dumps({"lessons": "L", "entries": [
+        {"iteration": 1, "component": "p", "parent_text": "a", "proposed_text": "b"}]})
+    back = Journal.from_json(text)
+    assert back.hypotheses == []
+    assert back.entries[0].analysis == ""
