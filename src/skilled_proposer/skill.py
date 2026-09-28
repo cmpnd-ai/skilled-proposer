@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -14,6 +14,9 @@ class Skill:
     name: str
     content: str
     description: str | None = None
+    # Other files in a skill directory, for the RLM engine. The Predict
+    # engine renders only `content`.
+    files: dict[str, str] = field(default_factory=dict, compare=False)
 
     @classmethod
     def load(cls, source: "Skill | str | Path") -> "Skill":
@@ -44,14 +47,17 @@ class Skill:
                     )
                 text = skill_md.read_text(encoding="utf-8")
                 fallback_name = path.name
+                files = _read_skill_files(path)
             else:
                 text = path.read_text(encoding="utf-8")
                 fallback_name = path.stem
+                files = {}
         else:
             text = str(source).strip()
             if not text:
                 raise ValueError("Empty skill content")
             fallback_name = None
+            files = {}
 
         meta, content = _parse_frontmatter(text)
         content = content.strip()
@@ -67,6 +73,7 @@ class Skill:
             name=meta.get("name") or fallback_name,
             content=content,
             description=meta.get("description"),
+            files=files,
         )
 
 
@@ -89,6 +96,22 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
                 meta[key.strip()] = value.strip().strip("'\"")
             return meta, "\n".join(lines[end + 1 :])
     return {}, text
+
+
+def _read_skill_files(root: Path) -> dict[str, str]:
+    """Every text file under a skill directory except its top-level SKILL.md."""
+    files: dict[str, str] = {}
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root)
+        if not p.is_file() or rel == Path("SKILL.md"):
+            continue
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        try:
+            files[rel.as_posix()] = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+    return files
 
 
 def render_skills(skills: Sequence[Skill]) -> str:

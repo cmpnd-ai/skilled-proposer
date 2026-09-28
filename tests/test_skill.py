@@ -117,3 +117,22 @@ def test_render_skills_blocks():
     assert "<skill name='second'>" in rendered
     assert "Be terse." in rendered
     assert rendered.count("</skill>") == 2
+
+
+def test_directory_skill_collects_other_files(tmp_path):
+    d = tmp_path / "s"
+    (d / "models").mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: s\n---\nMain.")
+    (d / "models" / "openai.md").write_text("OpenAI notes.")
+    (d / ".hidden").write_text("x")
+    (d / "blob.bin").write_bytes(b"\xff\xfe\x00")
+    skill = Skill.load(d)
+    assert skill.content == "Main."
+    assert skill.files == {"models/openai.md": "OpenAI notes."}
+
+
+def test_file_and_inline_skills_have_no_files(tmp_path):
+    f = tmp_path / "x.md"
+    f.write_text("Body")
+    assert Skill.load(f).files == {}
+    assert Skill.load("Inline skill text").files == {}
