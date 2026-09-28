@@ -98,3 +98,39 @@ def test_code_module_base_instructions_override():
 def test_code_module_named_predictors():
     names = {name for name, _ in CodeProposalModule().named_predictors()}
     assert names == {"propose"}
+
+
+from skilled_proposer.signatures import JournalNotes, rlm_instructions, rlm_signature
+
+
+def test_rlm_instructions_with_everything():
+    text = rlm_instructions(journal=True, seen=True)
+    assert "Only records tagged `current`" in text
+    assert "seen[\"instructions\"]" in text
+    assert "`journal`:" in text and "journal_notes" in text
+    assert "Check the target's prevalence in `seen`." in text
+    assert "Measure before you read" in text
+
+
+def test_rlm_instructions_without_journal_or_seen():
+    text = rlm_instructions(journal=False, seen=False)
+    assert "`seen` is empty this run." in text
+    assert "journal" not in text.lower()
+    assert "prevalence in `seen`" not in text
+
+
+def test_rlm_signature_fields():
+    sig = rlm_signature(journal=True, seen=True)
+    assert list(sig.input_fields) == [
+        "current_instruction", "examples", "seen", "journal", "skill", "skill_files",
+        "additional_guidance", "length_limit",
+    ]
+    assert list(sig.output_fields) == ["new_instruction", "change_summary", "journal_notes"]
+    assert sig.output_fields["journal_notes"].annotation is JournalNotes
+    bare = rlm_signature(journal=False, seen=False)
+    assert "journal" not in bare.input_fields
+    assert "journal_notes" not in bare.output_fields
+
+
+def test_rlm_signature_base_instructions_replace_the_prompt():
+    assert rlm_signature("Custom.", journal=False, seen=False).instructions == "Custom."

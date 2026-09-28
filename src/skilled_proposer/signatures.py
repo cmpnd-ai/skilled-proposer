@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import dspy
+import pydantic
+
+from skilled_proposer.sandbox import SandboxJSON
 
 
 class ProposeGeneralizableInstruction(dspy.Signature):
@@ -154,6 +157,167 @@ class InstructionProposalModule(dspy.Module):
             additional_guidance=additional_guidance,
             length_limit=length_limit,
         )
+
+
+# --------------------------------------------------------------------------- #
+# RLM engine
+# --------------------------------------------------------------------------- #
+
+class JournalNotes(pydantic.BaseModel):
+    """The RLM's notes for the proposal journal."""
+
+    lessons: list[str]
+    hypotheses: list[str]
+    entry_analysis: dict[str, str]
+
+
+_RLM_PROMPT = """\
+You are improving the instruction for one component of an AI program. The
+assistant that runs it will see only your instruction, never these records,
+so the instruction must teach the task on its own and work on inputs unlike
+any you see here.
+
+## Your evidence
+- `examples`: this round's records (inputs, outputs, evaluator feedback). They
+  were sampled at random for this round. Choose what to fix from these.
+{seen}{journal}- `skill` and `skill_files`: reference material. Open files when a diagnosis
+  calls for them.
+
+## Measure before you read
+Before reading any single record closely, compute an overview with code: how
+many records failed (judge from the feedback), output lengths, recurring
+phrases in feedback. Label every failure's root cause with
+llm_query_batched and count the labels in Python. Never estimate a count by
+eye. Check for absences too: things a correct output needs that no output
+contains. Then read a few records from the largest failure group, and from
+passing records that look similar, to find the rule that separates them.
+
+## Choose a target
+Fix the largest failure group that an instruction can fix, and at most one
+more. Later rounds will handle the rest. If a group is really an output-format
+or contract failure, fix that first.{target}
+
+## Edit, don't rewrite
+Treat `current_instruction` as a variable and change only the section your
+diagnosis covers. Keep what already works. Rewrite from scratch only when
+failures are widespread{rewrite}.
+
+## Write rules that transfer
+State each rule as the concept behind it, in one or two sentences. Where a
+rule's boundary is subtle, show one case where it applies and one where it
+does not, written in your own words with invented details. Never copy
+entities, numbers, phrases or answers from the records. Never refer to "the
+examples", "the data" or "this dataset" in the instruction.
+Before submitting, check that the change would not flip a sample of the
+passing records in {flip} to wrong: ask llm_query whether the new rule
+changes the correct output.
+
+## Reference material and guidance
+Follow any additional guidance from the user. Do not exceed the length limit
+if one is given.
+
+## Submit
+Check the length limit in code. Then SUBMIT:
+- new_instruction.
+- change_summary: what you changed, with the counts that justify it
+  (e.g. "7 of 15 failures: ...").
+{notes}"""
+
+_SEEN = """\
+- `seen`: records from earlier rounds. Only records tagged `current` were
+  produced by the instruction you are improving. `ancestor` and
+  `other_branch` records were produced by older or different instructions,
+  and `seen["instructions"]` holds their text. Before counting an old failure
+  as a current problem, check whether the current instruction already
+  addresses it. A failure that still appears in `current` records after an
+  edit meant to fix it is persistent. One that stops appearing was likely
+  fixed. Use `seen` to measure prevalence and past attempts; choose what to
+  fix from `examples`.
+"""
+
+_SEEN_EMPTY = "- `seen` is empty this run.\n"
+
+_JOURNAL = """\
+- `journal`: earlier proposals, whether the optimizer kept them, and your own
+  past lessons and hypotheses. Read the lessons and hypotheses first.
+"""
+
+_NOTES = """\
+- journal_notes:
+  - lessons: general lessons about what this task rewards.
+  - hypotheses: untested ideas, each with the evidence that would confirm it.
+  - entry_analysis: for past entries that today's evidence explains, why they
+    were kept or not kept, keyed by entry id.
+"""
+
+
+def rlm_instructions(*, journal: bool, seen: bool) -> str:
+    """The RLM engine's prompt, without the parts for inputs this run lacks."""
+    target = ""
+    if seen:
+        target += " Check the target's prevalence in `seen`."
+    if journal:
+        target += (
+            " If the journal shows a similar change was rejected, try a"
+            " different fix unless you have new evidence."
+        )
+    return _RLM_PROMPT.format(
+        seen=_SEEN if seen else _SEEN_EMPTY,
+        journal=_JOURNAL if journal else "",
+        target=target,
+        rewrite=", or when the journal shows several rounds without an accepted change" if journal else "",
+        flip="`examples` and `seen`" if seen else "`examples`",
+        notes=_NOTES if journal else "",
+    )
+
+
+class ProposeWithAnalysis(dspy.Signature):
+    """Propose an instruction by analyzing records in a Python sandbox.
+    `rlm_signature` replaces this text with the RLM engine's prompt."""
+
+    current_instruction: str = dspy.InputField(
+        desc="The instruction currently given to the assistant."
+    )
+    examples: SandboxJSON = dspy.InputField(
+        desc="This round's reflective records, sampled at random."
+    )
+    seen: SandboxJSON = dspy.InputField(
+        desc="Records from earlier rounds and the instructions that produced them."
+    )
+    journal: SandboxJSON = dspy.InputField(
+        desc="Earlier proposals, their outcomes, lessons, and hypotheses."
+    )
+    skill: str = dspy.InputField(desc="Reference skills. May be 'None'.")
+    skill_files: dict[str, str] = dspy.InputField(
+        desc="Other files from the reference skills, keyed by path."
+    )
+    additional_guidance: str = dspy.InputField(
+        desc="Extra requirements from the user for the new instruction. May be 'None'."
+    )
+    length_limit: str = dspy.InputField(
+        desc="Length limit for the new instruction, or 'None'."
+    )
+    new_instruction: str = dspy.OutputField(
+        desc="The improved, generalizable instruction. Instruction text only."
+    )
+    change_summary: str = dspy.OutputField(
+        desc="What you changed and the counts that justify it."
+    )
+    journal_notes: JournalNotes = dspy.OutputField(
+        desc="Updated lessons, hypotheses, and analysis of past entries."
+    )
+
+
+def rlm_signature(
+    base_instructions: str | None = None, *, journal: bool, seen: bool
+) -> type[dspy.Signature]:
+    """The RLM engine's signature for this run's settings."""
+    sig = ProposeWithAnalysis.with_instructions(
+        base_instructions or rlm_instructions(journal=journal, seen=seen)
+    )
+    if not journal:
+        sig = sig.delete("journal").delete("journal_notes")
+    return sig
 
 
 class ProposeGeneralizableModuleSource(dspy.Signature):
