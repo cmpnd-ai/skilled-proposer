@@ -228,3 +228,32 @@ def test_lm_error_propagates_from_the_rlm():
     proposer.module.rlm = boom
     with pytest.raises(LMError):
         call(proposer, {"p": "Do it."}, {"p": []})
+
+
+def test_resumed_run_continues_iterations_from_saved_state(tmp_path):
+    submit = "SUBMIT(new_instruction='A' + str(len(seen['records'])), change_summary='x', " \
+             "journal_notes={'lessons': [], 'hypotheses': [], 'entry_analysis': {}})"
+    paths = dict(journal=True, journal_path=tmp_path / "j.json", review="seen",
+                 seen_path=tmp_path / "s.json", distill_every=None)
+    first = rlm_proposer(scripted(submit, submit), **paths)
+    call(first, {"p": "seed"}, {"p": [{"Feedback": "r1"}]})
+    call(first, {"p": "seed"}, {"p": [{"Feedback": "r2"}]})
+
+    resumed = rlm_proposer(scripted(submit), **paths)
+    out = call(resumed, {"p": "seed"}, {"p": [{"Feedback": "r3"}]})
+
+    assert out == {"p": "A2"}  # both saved records are visible on the first resumed call
+    ids = [e.entry_id for e in resumed.journal.entries]
+    assert ids == ["1:p", "2:p", "3:p"]
+
+
+def test_auto_without_deno_warns_at_construction(monkeypatch, caplog):
+    monkeypatch.setattr(proposer_module, "_deno_error", lambda: "no deno here")
+    SkilledProposer(engine="auto")
+    assert "Deno" in caplog.text and "skilled-proposer[rlm]" in caplog.text
+
+
+def test_auto_with_an_interpreter_factory_does_not_warn(monkeypatch, caplog):
+    monkeypatch.setattr(proposer_module, "_deno_error", lambda: "no deno here")
+    SkilledProposer(engine="auto", interpreter_factory=ExecInterpreter)
+    assert "Deno" not in caplog.text

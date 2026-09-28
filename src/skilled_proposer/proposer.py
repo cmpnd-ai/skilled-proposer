@@ -233,9 +233,6 @@ class SkilledProposer:
         self.distill_every = distill_every if journal else None
         self.journal = Journal.load(self.journal_path) if self.journal_path else Journal()
 
-        # Each proposal call counts as one journal iteration.
-        self._iteration = 0
-
         # All LM-facing predictors live on a dspy.Module.
         self.module = InstructionProposalModule(
             self.base_instructions, with_change_summary=journal
@@ -251,6 +248,14 @@ class SkilledProposer:
         self.store = None
         if review == "seen":
             self.store = SeenStore.load(self.seen_path) if self.seen_path else SeenStore()
+        # Each proposal call counts as one journal iteration. A resumed run
+        # continues numbering after the saved journal and store, so entry ids
+        # stay unique and earlier records stay visible in `seen`.
+        self._iteration = max(
+            [e.iteration for e in self.journal.entries]
+            + [r["tags"]["iteration"] for rs in (self.store.records if self.store else {}).values() for r in rs]
+            + [0]
+        )
 
         # The engine is fixed for the whole run. "auto" without seen review
         # is decided on the first call, from the size of its prompt.
@@ -259,6 +264,17 @@ class SkilledProposer:
             self._engine = "rlm"
         if self._engine == "rlm" and interpreter_factory is None:
             _require_deno()
+        if self._engine is None and interpreter_factory is None:
+            # GEPA catches proposer errors, so an "auto" run that picks RLM
+            # without Deno would fail every call without stopping. Say so now.
+            error = _deno_error()
+            if error is not None:
+                logger.warning(
+                    'engine="auto" may choose RLM on the first call, but Deno is not available, '
+                    "so every proposal would fail. Install it with "
+                    '`pip install "skilled-proposer[rlm]"` or use engine="predict". (%s)',
+                    error,
+                )
         if engine != "predict":
             self.module.rlm = dspy.RLM(
                 rlm_signature(self.base_instructions, journal=journal, seen=review == "seen"),

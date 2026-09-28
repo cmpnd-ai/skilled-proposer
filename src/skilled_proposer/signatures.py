@@ -243,7 +243,9 @@ _JOURNAL = """\
 """
 
 _NOTES = """\
-- journal_notes:
+- journal_notes. These replace the journal's lessons and hypotheses, so
+  carry forward the ones that still hold and drop the ones today's evidence
+  contradicts.
   - lessons: general lessons about what this task rewards.
   - hypotheses: untested ideas, each with the evidence that would confirm it.
   - entry_analysis: for past entries that today's evidence explains, why they

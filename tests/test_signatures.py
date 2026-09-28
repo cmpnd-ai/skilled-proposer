@@ -134,3 +134,9 @@ def test_rlm_signature_fields():
 
 def test_rlm_signature_base_instructions_replace_the_prompt():
     assert rlm_signature("Custom.", journal=False, seen=False).instructions == "Custom."
+
+
+def test_rlm_instructions_say_notes_replace_the_old_ones():
+    text = rlm_instructions(journal=True, seen=False)
+    assert "replace the journal's lessons and hypotheses" in text
+    assert "carry forward the ones that still hold" in text

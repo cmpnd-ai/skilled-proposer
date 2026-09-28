@@ -136,3 +136,18 @@ def test_file_and_inline_skills_have_no_files(tmp_path):
     f.write_text("Body")
     assert Skill.load(f).files == {}
     assert Skill.load("Inline skill text").files == {}
+
+
+def test_unreadable_skill_file_is_skipped(tmp_path):
+    d = tmp_path / "s"
+    d.mkdir()
+    (d / "SKILL.md").write_text("Main.")
+    locked = d / "locked.md"
+    locked.write_text("secret")
+    locked.chmod(0)
+    try:
+        skill = Skill.load(d)
+    finally:
+        locked.chmod(0o644)
+    assert skill.content == "Main."
+    assert skill.files == {}

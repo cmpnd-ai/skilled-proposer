@@ -109,8 +109,8 @@ def _read_skill_files(root: Path) -> dict[str, str]:
             continue
         try:
             files[rel.as_posix()] = p.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
+        except (UnicodeDecodeError, OSError):
+            continue  # binary or unreadable: skip it rather than fail the skill
     return files
 
 
