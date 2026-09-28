@@ -159,3 +159,29 @@ def test_recorder_writes_one_row_per_iteration(data, tmp_path):
     assert summary["best_valset_score"] == 1.0
     recorder.write_trajectory(tmp_path / "t.jsonl")
     assert len((tmp_path / "t.jsonl").read_text().splitlines()) == len(recorder.rows)
+
+
+def test_rlm_engine_runs_in_gepa_with_seen_and_journal(data, tmp_path):
+    from rlm_support import ExecInterpreter, scripted
+
+    dspy.configure(lm=HalfStudentLM())
+    code = (
+        "n = len(seen['records'])\n"
+        "SUBMIT(new_instruction=f'GOOD {n}', change_summary=f'seen {n}', "
+        "journal_notes={'lessons': [f'lesson {n}'], 'hypotheses': [], 'entry_analysis': {}})"
+    )
+    reflection = scripted(*([code] * 30))
+    proposer = SkilledProposer(
+        engine="rlm", review="seen", journal=True, interpreter_factory=ExecInterpreter,
+        seen_path=tmp_path / "seen.json",
+    )
+
+    optimized = run_gepa(proposer, reflection, data, max_metric_calls=40)
+
+    assert "GOOD" in optimized.predict.signature.instructions
+    summaries = [e.change_summary for e in proposer.journal.entries]
+    assert summaries[0] == "seen 0"
+    assert len(summaries) >= 2 and summaries[1] != "seen 0"
+    assert proposer.journal.lessons.startswith("lesson")
+    assert proposer.store.edges["predict"]
+    assert (tmp_path / "seen.json").exists()
