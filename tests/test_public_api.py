@@ -21,4 +21,8 @@ def test_public_exports():
         "use_code_proposer",
         "install_code_proposer",
         "uninstall_code_proposer",
+        "SandboxJSON",
+        "SeenStore",
+        "JournalNotes",
+        "ProposeWithAnalysis",
     }

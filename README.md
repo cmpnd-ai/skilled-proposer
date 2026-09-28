@@ -89,6 +89,15 @@ SkilledProposer(
     journal_path=None,             # JSON file for the journal
     journal_entries=12,            # entries shown to the reflection model
     distill_every=5,               # entries between lesson distillations
+    engine="predict",              # "predict", "rlm", or "auto", see below
+    review="minibatch",            # "minibatch" or "seen" (RLM only)
+    seen_path=None,                # JSON file for the seen store
+    rlm_threshold=30_000,          # auto: prompt tokens that select RLM
+    sub_lm=None,                   # LM for the RLM's llm_query calls
+    max_iters=20,                  # RLM REPL iterations per proposal
+    max_llm_calls=50,              # RLM sub-LM calls per proposal
+    interpreter_factory=None,      # custom sandbox; None uses Deno
+    seed=0,                        # order of seen records
 )
 ```
 
@@ -145,6 +154,40 @@ optimizer = dspy.GEPA(
     auto="medium",
 )
 ```
+
+## RLM engine
+
+With `engine="rlm"`, each proposal runs as a [`dspy.RLM`](https://dspy.ai/api/modules/RLM/). The reflection model gets the reflective records as data in a Python sandbox and analyzes them with code and sub-LM calls before it writes. It counts failures across the batch, labels their root causes, and reads the records that the counts point to. Long inputs and agent histories no longer have to fit in one prompt.
+
+```bash
+pip install "skilled-proposer[rlm]"   # adds Deno for dspy's sandbox
+```
+
+```python
+proposer = SkilledProposer(
+    skills=["./skills/prompt-engineering"],
+    engine="rlm",
+    review="seen",
+    journal=True,
+    journal_path="runs/committee/journal.json",
+    seen_path="runs/committee/seen.json",
+)
+
+optimizer = dspy.GEPA(
+    metric=metric,
+    reflection_lm=dspy.LM("openai/gpt-5.6-luna"),
+    instruction_proposer=proposer,
+    reflection_minibatch_size=40,
+    auto="medium",
+)
+```
+
+- **Engine choice.** `engine="auto"` uses RLM when `review="seen"`, or when the first proposal's prompt is at least `rlm_threshold` tokens, and Predict otherwise. The choice is made once and kept for the run.
+- **Seen review.** `review="seen"` also shows the model every record GEPA gave the proposer earlier in the run. Each record is tagged `current`, `ancestor` (with how many edits back) or `other_branch`, depending on how the instruction that produced it relates to the one being improved, and the store keeps those instructions' text. The model chooses what to fix from this round's records and uses the older ones to measure how common a failure is. The store reaches the whole trainset only after one epoch, `train size / reflection_minibatch_size` iterations, so pair it with a large `reflection_minibatch_size`. The relation is tracked per component, so for a multi-predictor program a `current` record may come from a time when other components differed.
+- **Journal.** With `journal=True`, the model reads the journal as data and writes back lessons, open hypotheses and its analysis of past entries each round. It cannot change the record of what was proposed or kept. The separate distillation step does not run under RLM.
+- **Skills.** Directory skills expose their other files, such as `models/openai.md`, to the model as `skill_files`, so it can open them when a diagnosis calls for them.
+- **Failures.** An RLM run that errors, runs out of `max_iters` or returns an empty instruction counts as a failure. `retries` runs the RLM again and then `on_error` applies. There is no fallback to the Predict engine.
+- **No extra rollouts.** The RLM analyzes records GEPA already produced. It never runs the student, so metric budgets are unchanged.
 
 ## Using the standalone gepa package
 

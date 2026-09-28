@@ -8,15 +8,19 @@ from skilled_proposer.patch import (
     use_code_proposer,
 )
 from skilled_proposer.proposer import SkilledProposer
+from skilled_proposer.sandbox import SandboxJSON
 from skilled_proposer.signatures import (
     CodeProposalModule,
     CompressInstruction,
     DistillLessons,
     InstructionProposalModule,
+    JournalNotes,
     ProposeGeneralizableInstruction,
     ProposeGeneralizableModuleSource,
+    ProposeWithAnalysis,
 )
 from skilled_proposer.skill import Skill
+from skilled_proposer.store import SeenStore
 
 __version__ = "0.2.0"
 
@@ -35,4 +39,8 @@ __all__ = [
     "use_code_proposer",
     "install_code_proposer",
     "uninstall_code_proposer",
+    "SandboxJSON",
+    "SeenStore",
+    "JournalNotes",
+    "ProposeWithAnalysis",
 ]

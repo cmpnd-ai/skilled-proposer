@@ -16,6 +16,7 @@ class Ablation:
     name: str
     proposer_kwargs: dict[str, Any] | None
     engine_kwargs: dict[str, Any] = field(default_factory=dict)
+    reflection_minibatch_size: int | None = None
 
     @property
     def uses_stock_proposer(self) -> bool:
@@ -27,6 +28,8 @@ class Ablation:
         kwargs = dict(self.proposer_kwargs)
         if kwargs.get("journal"):
             kwargs["journal_path"] = run_dir / "journal.json"
+        if kwargs.get("review") == "seen":
+            kwargs["seen_path"] = run_dir / "seen.json"
         return SkilledProposer(skills=SKILLS, **kwargs)
 
     def gepa_kwargs(self, extra_callbacks: list[Any]) -> dict[str, Any]:
@@ -45,6 +48,11 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "baseline-long": lambda: Ablation("baseline-long", {"additional_instructions": LONG_GUIDANCE}),
     "baseline-short": lambda: Ablation("baseline-short", {"max_words": 150}),
     "journal-long": lambda: Ablation("journal-long", {"journal": True, "additional_instructions": LONG_GUIDANCE}),
+    "rlm": lambda: Ablation("rlm", {"engine": "rlm", "journal": True}),
+    "rlm-seen": lambda: Ablation(
+        "rlm-seen", {"engine": "rlm", "review": "seen", "journal": True},
+        reflection_minibatch_size=40,
+    ),
 }
 
 

@@ -79,7 +79,7 @@ def run_one(ablation: Ablation, seed: int, args, train, val, test, reflection_lm
         reflection_lm=reflection_lm,
         instruction_proposer=proposer,
         max_metric_calls=args.max_metric_calls,
-        reflection_minibatch_size=args.reflection_minibatch_size,
+        reflection_minibatch_size=ablation.reflection_minibatch_size or args.reflection_minibatch_size,
         num_threads=args.num_threads,
         seed=seed,
         track_stats=True,

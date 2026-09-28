@@ -77,6 +77,7 @@ from skilled_proposer import SkilledProposer
 def test_ablation_registry_names():
     assert list(ABLATIONS) == [
         "stock", "baseline", "journal", "baseline-long", "baseline-short", "journal-long",
+        "rlm", "rlm-seen",
     ]
     long = ABLATIONS["baseline-long"]()
     short = ABLATIONS["baseline-short"]()
@@ -170,3 +171,16 @@ def test_tracing_on_with_key(monkeypatch, capsys):
     assert run.configure_tracing() is True
     assert calls == [("configure", {"project_tags": run.TRACE_TAGS}), ("auto_instrument", {})]
     assert "tracing on" in capsys.readouterr().out
+
+
+def test_rlm_ablations(tmp_path, monkeypatch):
+    monkeypatch.setattr("skilled_proposer.proposer._deno_error", lambda: None)
+    rlm = ABLATIONS["rlm"]()
+    assert rlm.proposer_kwargs == {"engine": "rlm", "journal": True}
+    assert rlm.reflection_minibatch_size is None
+    seen = ABLATIONS["rlm-seen"]()
+    assert seen.reflection_minibatch_size == 40
+    proposer = seen.build_proposer(tmp_path)
+    assert proposer.review == "seen"
+    assert proposer.seen_path == tmp_path / "seen.json"
+    assert proposer.journal_path == tmp_path / "journal.json"
