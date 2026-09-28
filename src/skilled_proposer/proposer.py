@@ -20,9 +20,13 @@ except ImportError:  # dspy < 3.x fallback: nothing raises it
     class LMError(Exception):
         pass
 
+from dspy.primitives.code_interpreter import CodeInterpreterError
+from dspy.primitives.python_interpreter import PythonInterpreter
+
 from skilled_proposer.journal import Journal, JournalEntry
-from skilled_proposer.signatures import InstructionProposalModule
+from skilled_proposer.signatures import InstructionProposalModule, rlm_signature
 from skilled_proposer.skill import Skill, render_skills
+from skilled_proposer.store import SeenStore
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,26 @@ def _attempt(propose, *, name: str, retries: int, on_error: str, label: str):
                 label, name, attempts,
             )
     return None
+
+
+def _deno_error() -> str | None:
+    """Why dspy's default sandbox cannot start here, or None when it can."""
+    from dspy.primitives.python_interpreter import _find_deno_executable, _validate_deno_version
+
+    try:
+        _validate_deno_version(_find_deno_executable())
+    except CodeInterpreterError as e:
+        return str(e)
+    return None
+
+
+def _require_deno() -> None:
+    error = _deno_error()
+    if error is not None:
+        raise RuntimeError(
+            'The RLM engine needs Deno. Install it with `pip install "skilled-proposer[rlm]"`, '
+            f"or pass interpreter_factory. ({error})"
+        )
 
 
 class SkilledProposer:
@@ -114,6 +138,27 @@ class SkilledProposer:
         journal_entries: How many recent entries render into the prompt.
         distill_every: Closed entries between lesson distillations. None
             turns distillation off. Ignored when journal is off.
+        engine: "predict" (default) proposes with one dspy.Predict call.
+            "rlm" runs each proposal as a dspy.RLM that analyzes the
+            records with code in a sandbox. "auto" uses RLM when
+            review="seen" or when the first call's prompt is at least
+            rlm_threshold tokens, and Predict otherwise. The choice is
+            fixed for the run.
+        review: "minibatch" (default) shows the RLM this call's records.
+            "seen" also shows every record from earlier calls, tagged by
+            how the instruction that produced it relates to the current
+            one. Requires engine="rlm" or "auto".
+        seen_path: Optional JSON file for the seen store. Requires
+            review="seen".
+        rlm_threshold: Prompt size in tokens at which engine="auto"
+            chooses RLM.
+        sub_lm: LM for the RLM's llm_query calls. Defaults to the
+            reflection LM.
+        max_iters: RLM REPL iterations per proposal.
+        max_llm_calls: Cap on the RLM's sub-LM calls per proposal.
+        interpreter_factory: Zero-argument callable returning a dspy
+            CodeInterpreter. None uses dspy's Deno sandbox.
+        seed: Seeds the order of seen records.
     """
 
     def __init__(
@@ -132,6 +177,15 @@ class SkilledProposer:
         journal_path: str | Path | None = None,
         journal_entries: int = 12,
         distill_every: int | None = 5,
+        engine: str = "predict",
+        review: str = "minibatch",
+        seen_path: str | Path | None = None,
+        rlm_threshold: int = 30_000,
+        sub_lm: "dspy.LM | None" = None,
+        max_iters: int = 20,
+        max_llm_calls: int = 50,
+        interpreter_factory=None,
+        seed: int = 0,
     ):
         if max_tokens is not None and max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
@@ -147,6 +201,16 @@ class SkilledProposer:
             raise ValueError("journal_entries must be positive")
         if distill_every is not None and distill_every <= 0:
             raise ValueError("distill_every must be positive or None")
+        if engine not in ("predict", "rlm", "auto"):
+            raise ValueError('engine must be "predict", "rlm", or "auto"')
+        if review not in ("minibatch", "seen"):
+            raise ValueError('review must be "minibatch" or "seen"')
+        if review == "seen" and engine == "predict":
+            raise ValueError('review="seen" needs engine="rlm" or engine="auto"')
+        if seen_path is not None and review != "seen":
+            raise ValueError('seen_path requires review="seen"')
+        if rlm_threshold <= 0 or max_iters <= 0 or max_llm_calls <= 0:
+            raise ValueError("rlm_threshold, max_iters, and max_llm_calls must be positive")
 
         self.skills = [Skill.load(s) for s in (skills or [])]
         self.additional_instructions = (additional_instructions or "").strip()
@@ -172,6 +236,33 @@ class SkilledProposer:
             self.base_instructions, with_change_summary=journal
         )
 
+        self.engine = engine
+        self.review = review
+        self.rlm_threshold = rlm_threshold
+        self.max_iters = max_iters
+        self.interpreter_factory = interpreter_factory
+        self.seed = seed
+        self.seen_path = Path(seen_path) if seen_path is not None else None
+        self.store = None
+        if review == "seen":
+            self.store = SeenStore.load(self.seen_path) if self.seen_path else SeenStore()
+
+        # The engine is fixed for the whole run. "auto" without seen review
+        # is decided on the first call, from the size of its prompt.
+        self._engine: str | None = {"predict": "predict", "rlm": "rlm"}.get(engine)
+        if engine == "auto" and review == "seen":
+            self._engine = "rlm"
+        if self._engine == "rlm" and interpreter_factory is None:
+            _require_deno()
+        if engine != "predict":
+            self.module.rlm = dspy.RLM(
+                rlm_signature(self.base_instructions, journal=journal, seen=review == "seen"),
+                max_iters=max_iters,
+                max_llm_calls=max_llm_calls,
+                sub_lm=sub_lm,
+                interpreter_factory=interpreter_factory or PythonInterpreter,
+            )
+
     # -- ProposalFn ---------------------------------------------------------
 
     def __call__(
@@ -188,9 +279,7 @@ class SkilledProposer:
         results: dict[str, str] = {}
         for name in components_to_update:
             current = candidate[name]
-            examples = list(reflective_dataset.get(name, []))
-            if self.max_examples is not None:
-                examples = examples[: self.max_examples]
+            examples = self._examples(name, reflective_dataset)
             proposal = _attempt(
                 lambda: self._propose_one(name, current, examples),
                 name=name,
@@ -260,10 +349,12 @@ class SkilledProposer:
                 return predictor(**kwargs)
         return predictor(**kwargs)
 
-    def _propose_one(
-        self, name: str, current_instruction: str, examples: Sequence[Mapping[str, Any]]
-    ) -> Proposal | None:
-        kwargs = dict(
+    def _examples(self, name: str, reflective_dataset) -> list:
+        examples = list(reflective_dataset.get(name, []))
+        return examples[: self.max_examples] if self.max_examples is not None else examples
+
+    def _predict_inputs(self, current_instruction: str, examples) -> dict[str, str]:
+        return dict(
             current_instruction=current_instruction,
             examples_with_feedback=_render_examples(examples),
             proposal_journal=self._render_journal(),
@@ -271,7 +362,24 @@ class SkilledProposer:
             additional_guidance=self.additional_instructions or "None",
             length_limit=self._length_limit_text(),
         )
-        pred = self._run(self.module, **kwargs)
+
+    def _resolve_engine(self, current_instruction: str, examples) -> str:
+        """Pick the engine once. Every later call reuses it."""
+        if self._engine is not None:
+            return self._engine
+        prompt = "\n\n".join(self._predict_inputs(current_instruction, examples).values())
+        size = _count_tokens(prompt, self._model_name())
+        engine = "rlm" if size >= self.rlm_threshold else "predict"
+        if engine == "rlm" and self.interpreter_factory is None:
+            _require_deno()
+        logger.info("SkilledProposer engine: %s (first prompt %d tokens).", engine, size)
+        self._engine = engine
+        return engine
+
+    def _propose_one(
+        self, name: str, current_instruction: str, examples: Sequence[Mapping[str, Any]]
+    ) -> Proposal | None:
+        pred = self._run(self.module, **self._predict_inputs(current_instruction, examples))
         proposal = _proposal_from(pred)
         proposal.text = self._enforce_length(proposal.text)
         return proposal

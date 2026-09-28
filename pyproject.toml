@@ -23,6 +23,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.optional-dependencies]
+rlm = ["dspy[deno]>=3.3.1"]
+
 [project.urls]
 Homepage = "https://github.com/cmpnd-ai/skilled-proposer"
 Repository = "https://github.com/cmpnd-ai/skilled-proposer"
@@ -38,6 +41,7 @@ dev-dependencies = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = ["deno: needs the Deno runtime for dspy's sandbox"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skilled_proposer"]
