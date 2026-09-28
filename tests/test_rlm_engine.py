@@ -76,3 +76,155 @@ def test_auto_resolving_to_rlm_without_deno_raises(monkeypatch):
     proposer = SkilledProposer(engine="auto", rlm_threshold=50)
     with pytest.raises(RuntimeError, match=r"skilled-proposer\[rlm\]"):
         proposer._resolve_engine("Do it.", [{"Inputs": "word " * 400}])
+
+
+from dspy.utils.dummies import DummyLM
+from dspy.utils.exceptions import LMError
+
+from skilled_proposer.skill import Skill
+
+from rlm_support import scripted, step
+
+
+def rlm_proposer(lm, **kw):
+    return SkilledProposer(engine="rlm", interpreter_factory=ExecInterpreter, prompt_model=lm, **kw)
+
+
+def call(proposer, candidate, dataset):
+    return proposer(candidate=candidate, reflective_dataset=dataset, components_to_update=list(candidate))
+
+
+def prompts(lm):
+    return [h["messages"][0]["content"] + h["messages"][-1]["content"] for h in lm.history]
+
+
+def test_rlm_proposal_explores_records_and_submits():
+    lm = scripted(
+        "print(len(examples['records']), examples['records'][0]['tags']['component'])",
+        "SUBMIT(new_instruction=current_instruction + ' Rule.', change_summary='1 of 1 failures.')",
+    )
+    out = call(rlm_proposer(lm), {"p": "Do it."}, {"p": [{"Inputs": {"q": "x"}, "Feedback": "wrong"}]})
+    assert out == {"p": "Do it. Rule."}
+    assert "list of 1 record dicts" in prompts(lm)[0]
+    assert "1 p" in prompts(lm)[1]
+    assert not any("examples_with_feedback" in p for p in prompts(lm))
+
+
+def test_rlm_sees_skill_files():
+    lm = scripted("SUBMIT(new_instruction=skill_files['s/models/openai.md'], change_summary='x')")
+    skill = Skill(name="s", content="Main.", files={"models/openai.md": "Use XML tags."})
+    out = call(rlm_proposer(lm, skills=[skill]), {"p": "Do it."}, {"p": []})
+    assert out == {"p": "Use XML tags."}
+
+
+def test_rlm_with_no_records_still_proposes():
+    lm = scripted("SUBMIT(new_instruction='N' + str(len(examples['records'])), change_summary='x')")
+    out = call(rlm_proposer(lm), {"p": "Do it."}, {"p": []})
+    assert out == {"p": "N0"}
+    assert "list of 0 record dicts" in prompts(lm)[0]
+
+
+def test_non_json_record_values_reach_the_sandbox_as_text():
+    class Thing:
+        def __str__(self):
+            return "thing"
+
+    lm = scripted("SUBMIT(new_instruction=examples['records'][0]['Inputs']['img'], change_summary='x')")
+    out = call(rlm_proposer(lm), {"p": "Do it."}, {"p": [{"Inputs": {"img": Thing()}, "Feedback": "wrong"}]})
+    assert out == {"p": "thing"}
+
+
+def test_journal_notes_carry_forward_and_distillation_is_skipped():
+    lm = scripted(
+        "SUBMIT(new_instruction='A', change_summary='x', "
+        "journal_notes={'lessons': ['L1'], 'hypotheses': [], 'entry_analysis': {}})",
+        "eid = journal['entries'][0]['id']\n"
+        "SUBMIT(new_instruction=journal['lessons'][0] + ' B', change_summary='y', "
+        "journal_notes={'lessons': ['L2'], 'hypotheses': ['H'], 'entry_analysis': {eid: 'Kept.'}})",
+    )
+    proposer = rlm_proposer(lm, journal=True, distill_every=1)
+    assert call(proposer, {"p": "seed"}, {"p": []}) == {"p": "A"}
+    assert call(proposer, {"p": "A"}, {"p": []}) == {"p": "L1 B"}
+    assert proposer.journal.lessons == "L2"
+    assert proposer.journal.hypotheses == ["H"]
+    first = proposer.journal.entries[0]
+    assert first.analysis == "Kept." and first.accepted is True
+    assert len(lm.history) == 2  # no distillation call
+
+
+def test_two_components_get_their_own_records_and_share_notes():
+    lm = scripted(
+        "SUBMIT(new_instruction='A' + str(len(examples['records'])), change_summary='x', "
+        "journal_notes={'lessons': ['from a'], 'hypotheses': [], 'entry_analysis': {}})",
+        "SUBMIT(new_instruction=journal['lessons'][0] + ' ' + str(len(examples['records'])), "
+        "change_summary='y', journal_notes={'lessons': ['from b'], 'hypotheses': [], 'entry_analysis': {}})",
+    )
+    proposer = rlm_proposer(lm, journal=True, distill_every=None)
+    dataset = {"a": [{"Feedback": "1"}, {"Feedback": "2"}], "b": [{"Feedback": "3"}]}
+    out = call(proposer, {"a": "old a", "b": "old b"}, dataset)
+    assert out == {"a": "A2", "b": "from a 1"}
+
+
+def test_seen_review_shows_earlier_records_with_relations(tmp_path):
+    lm = scripted(
+        "SUBMIT(new_instruction='A' + str(len(seen['records'])), change_summary='x')",
+        "r = seen['records'][0]\n"
+        "t = r['tags']\n"
+        "SUBMIT(new_instruction=':'.join([r['Feedback'], t['relation'], str(t['edits_back']), "
+        "seen['instructions'][t['instruction']]['text'], str(len(examples['records']))]), change_summary='y')",
+    )
+    path = tmp_path / "seen.json"
+    proposer = rlm_proposer(lm, review="seen", seen_path=path)
+    assert call(proposer, {"p": "seed"}, {"p": [{"Feedback": "s1"}]}) == {"p": "A0"}
+    assert call(proposer, {"p": "A0"}, {"p": [{"Feedback": "a1"}]}) == {"p": "s1:ancestor:1:seed:1"}
+    assert path.exists()
+    reloaded = rlm_proposer(scripted(), review="seen", seen_path=path)
+    assert [r["Feedback"] for r in reloaded.store.records["p"]] == ["s1", "a1"]
+
+
+def test_minibatch_review_passes_an_empty_seen():
+    lm = scripted("SUBMIT(new_instruction=str(len(seen['records'])), change_summary='x')")
+    assert call(rlm_proposer(lm), {"p": "Do it."}, {"p": [{"Feedback": "wrong"}]}) == {"p": "0"}
+    assert "`seen` is empty this run." in prompts(lm)[0]
+
+
+def out_of_iterations_lm():
+    """One step that never calls SUBMIT, then the reply for dspy's extract step."""
+    return DummyLM([step("print('thinking')"), {"new_instruction": "Extracted.", "change_summary": "y"}])
+
+
+def test_extract_fallback_is_a_failure():
+    with pytest.raises(RuntimeError, match="max_iters"):
+        call(rlm_proposer(out_of_iterations_lm(), max_iters=1, on_error="raise"), {"p": "Do it."}, {"p": []})
+
+
+def test_extract_fallback_with_skip_leaves_the_component_out():
+    proposer = rlm_proposer(out_of_iterations_lm(), max_iters=1, retries=0)
+    assert call(proposer, {"p": "Do it."}, {"p": []}) == {}
+
+
+def test_empty_instruction_is_a_failure():
+    lm = scripted("SUBMIT(new_instruction='   ', change_summary='x')")
+    with pytest.raises(ValueError, match="empty"):
+        call(rlm_proposer(lm, on_error="raise"), {"p": "Do it."}, {"p": []})
+
+
+def test_retries_rerun_the_rlm_never_predict():
+    lm = scripted(
+        "SUBMIT(new_instruction='', change_summary='x')",
+        "SUBMIT(new_instruction='Second try.', change_summary='y')",
+    )
+    out = call(rlm_proposer(lm, retries=1), {"p": "Do it."}, {"p": []})
+    assert out == {"p": "Second try."}
+    assert not any("examples_with_feedback" in p for p in prompts(lm))
+
+
+def test_lm_error_propagates_from_the_rlm():
+    proposer = rlm_proposer(scripted())
+
+    def boom(**kwargs):
+        raise LMError("provider down")
+
+    proposer.module.rlm = boom
+    with pytest.raises(LMError):
+        call(proposer, {"p": "Do it."}, {"p": []})

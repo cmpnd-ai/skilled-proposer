@@ -26,11 +26,16 @@ from dspy.primitives.python_interpreter import PythonInterpreter
 from skilled_proposer.journal import Journal, JournalEntry
 from skilled_proposer.signatures import InstructionProposalModule, rlm_signature
 from skilled_proposer.skill import Skill, render_skills
-from skilled_proposer.store import SeenStore
+from skilled_proposer.sandbox import SandboxJSON, summarize_journal, summarize_records
+from skilled_proposer.store import SeenStore, tag_records
 
 logger = logging.getLogger(__name__)
 
 _WORD_RE = re.compile(r"\S+")
+
+# dspy.RLM's final_reasoning when it ran out of iterations and pulled an
+# answer out of the transcript instead of the model calling SUBMIT.
+_EXTRACT_FALLBACK = "Extract forced final output"
 
 
 @dataclass
@@ -275,13 +280,26 @@ class SkilledProposer:
         self._iteration += 1
         if self.journal_enabled:
             self._advance_journal(candidate)
+        if self._engine is None and components_to_update:
+            first = components_to_update[0]
+            self._resolve_engine(candidate[first], self._examples(first, reflective_dataset))
 
         results: dict[str, str] = {}
+        seen_batches: list[tuple[str, str, list[dict]]] = []
         for name in components_to_update:
             current = candidate[name]
             examples = self._examples(name, reflective_dataset)
+            if self._engine == "rlm":
+                records = tag_records(
+                    examples, component=name, iteration=self._iteration, instruction=current
+                )
+                if self.store is not None:
+                    seen_batches.append((name, current, records))
+                propose = lambda: self._propose_rlm(name, current, records)  # noqa: E731
+            else:
+                propose = lambda: self._propose_one(name, current, examples)  # noqa: E731
             proposal = _attempt(
-                lambda: self._propose_one(name, current, examples),
+                propose,
                 name=name,
                 retries=self.retries,
                 on_error=self.on_error,
@@ -290,6 +308,8 @@ class SkilledProposer:
             if proposal is None:
                 continue
             results[name] = proposal.text
+            if self.store is not None:
+                self.store.link(name, current, proposal.text)
             if self.journal_enabled:
                 self.journal.open(
                     JournalEntry(
@@ -300,6 +320,12 @@ class SkilledProposer:
                         change_summary=proposal.change_summary,
                     )
                 )
+        # Stored after every component is proposed, so this call's records
+        # show up only in `examples`, never in `seen`.
+        if self.store is not None:
+            for name, current, records in seen_batches:
+                self.store.add(name, current, records)
+            self._save_store()
         if self.journal_enabled:
             self._save_journal()
         return results
@@ -314,7 +340,11 @@ class SkilledProposer:
                 e.accepted = True
                 e.reason = f"Chosen as the parent in iteration {self._iteration}."
         self.journal.close(self._iteration - 1)
-        if self.distill_every and self.journal.closed_since_distill >= self.distill_every:
+        if (
+            self.distill_every
+            and self._engine != "rlm"
+            and self.journal.closed_since_distill >= self.distill_every
+        ):
             self._distill()
 
     def _save_journal(self) -> None:
@@ -325,6 +355,15 @@ class SkilledProposer:
             self.journal.save(self.journal_path)
         except Exception:
             logger.warning("Failed to save the journal to %s.", self.journal_path, exc_info=True)
+
+    def _save_store(self) -> None:
+        """Write the seen store to seen_path. Logs and never raises on failure."""
+        if self.seen_path is None:
+            return
+        try:
+            self.store.save(self.seen_path)
+        except Exception:
+            logger.warning("Failed to save the seen store to %s.", self.seen_path, exc_info=True)
 
     def _distill(self) -> None:
         """Refresh the lessons from the whole journal. Never raises into GEPA."""
@@ -383,6 +422,48 @@ class SkilledProposer:
         proposal = _proposal_from(pred)
         proposal.text = self._enforce_length(proposal.text)
         return proposal
+
+    def _propose_rlm(self, name: str, current_instruction: str, records: list[dict]) -> Proposal:
+        """One proposal through dspy.RLM. Raises on any unusable result."""
+        examples = {"records": records}
+        inputs = dict(
+            current_instruction=current_instruction,
+            examples=SandboxJSON(examples, summarize_records("examples", examples)),
+            seen=self._seen_input(name, current_instruction),
+            skill=self._render_skills(),
+            skill_files=self._skill_files(),
+            additional_guidance=self.additional_instructions or "None",
+            length_limit=self._length_limit_text(),
+        )
+        if self.journal_enabled:
+            data = self.journal.to_data()
+            inputs["journal"] = SandboxJSON(data, summarize_journal(data))
+        pred = self._run(self.module.rlm, **inputs)
+        if getattr(pred, "final_reasoning", "") == _EXTRACT_FALLBACK:
+            raise RuntimeError(f"RLM reached max_iters={self.max_iters} without calling SUBMIT.")
+        text = (pred.new_instruction or "").strip()
+        if not text:
+            raise ValueError("RLM returned an empty instruction.")
+        proposal = Proposal(
+            text=self._enforce_length(text),
+            change_summary=(pred.change_summary or "").strip(),
+        )
+        if self.journal_enabled:
+            notes = pred.journal_notes
+            self.journal.apply_notes(notes.lessons, notes.hypotheses, notes.entry_analysis)
+        return proposal
+
+    def _seen_input(self, name: str, current_instruction: str) -> SandboxJSON:
+        if self.store is None:
+            return SandboxJSON(
+                {"instructions": {}, "records": []},
+                "`seen` is empty: this run reviews only the current minibatch.",
+            )
+        view = self.store.view(name, current_instruction, self._iteration, self.seed)
+        return SandboxJSON(view, summarize_records("seen", view))
+
+    def _skill_files(self) -> dict[str, str]:
+        return {f"{s.name}/{path}": text for s in self.skills for path, text in s.files.items()}
 
     def _render_journal(self) -> str:
         if not self.journal_enabled:
