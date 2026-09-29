@@ -23,6 +23,7 @@ except ImportError:  # dspy < 3.x fallback: nothing raises it
 from dspy.primitives.code_interpreter import CodeInterpreterError
 from dspy.primitives.python_interpreter import PythonInterpreter
 
+from skilled_proposer.compaction import Compaction, compact_examples
 from skilled_proposer.journal import Journal, JournalEntry
 from skilled_proposer.signatures import InstructionProposalModule, rlm_signature
 from skilled_proposer.skill import Skill, render_skills
@@ -114,7 +115,8 @@ class SkilledProposer:
         max_tokens: Optional cap on the proposed instruction length in tokens
             (counted with litellm's tokenizer when available, else ~4 chars
             per token).
-        max_words: Optional cap on the proposed instruction length in words.
+        max_words: Cap on the proposed instruction length in words. Defaults
+            to 1000; pass None to remove the cap.
         prompt_model: Optional dspy.LM to run proposals with. Not needed under
             `dspy.GEPA`, which already wraps calls in the reflection LM's
             context; useful with the standalone `gepa` package.
@@ -164,6 +166,14 @@ class SkilledProposer:
         interpreter_factory: Zero-argument callable returning a dspy
             CodeInterpreter. None uses dspy's Deno sandbox.
         seed: Seeds the order of seen records.
+        compaction: Experimental. Shorten long agent trajectories and other
+            long fields in the reflective examples before they render into
+            the prompt. True uses Compaction() defaults. A Compaction sets
+            observation_chars, max_field_chars, and examples_token_budget.
+            Histories from dspy.ReAct, dspy.ReActV2, and dspy.RLM render as
+            numbered steps with thoughts, tool calls, and code in full. Each
+            tool result keeps its head. RLM outputs keep the head and tail
+            the student saw. Feedback is never cut.
     """
 
     def __init__(
@@ -172,7 +182,7 @@ class SkilledProposer:
         additional_instructions: str | None = None,
         base_instructions: str | None = None,
         max_tokens: int | None = None,
-        max_words: int | None = None,
+        max_words: int | None = 1000,
         prompt_model: "dspy.LM | None" = None,
         max_examples: int | None = None,
         retries: int = 1,
@@ -191,6 +201,7 @@ class SkilledProposer:
         max_llm_calls: int = 50,
         interpreter_factory=None,
         seed: int = 0,
+        compaction: bool | Compaction = False,
     ):
         if max_tokens is not None and max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
@@ -216,6 +227,8 @@ class SkilledProposer:
             raise ValueError('seen_path requires review="seen"')
         if rlm_threshold <= 0 or max_iters <= 0 or max_llm_calls <= 0:
             raise ValueError("rlm_threshold, max_iters, and max_llm_calls must be positive")
+        if not isinstance(compaction, (bool, Compaction)):
+            raise TypeError("compaction must be a bool or a Compaction")
 
         self.skills = [Skill.load(s) for s in (skills or [])]
         self.additional_instructions = (additional_instructions or "").strip()
@@ -226,6 +239,7 @@ class SkilledProposer:
         self.max_examples = max_examples
         self.retries = retries
         self.on_error = "skip" if on_error == "keep" else on_error
+        self.compaction = Compaction() if compaction is True else (compaction or None)
 
         self.journal_enabled = journal
         self.journal_path = Path(journal_path) if journal_path is not None else None
@@ -305,6 +319,8 @@ class SkilledProposer:
         for name in components_to_update:
             current = candidate[name]
             examples = self._examples(name, reflective_dataset)
+            if self.compaction is not None:
+                examples = self._compact(name, examples)
             if self._engine == "rlm":
                 records = tag_records(
                     examples, component=name, iteration=self._iteration, instruction=current
@@ -395,6 +411,41 @@ class SkilledProposer:
         except Exception:
             logger.warning("Lesson distillation failed; keeping the prior lessons.", exc_info=True)
         self.journal.closed_since_distill = 0
+
+    # -- Compaction ---------------------------------------------------------
+
+    def _compact(self, name: str, examples: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+        """Compact one component's examples. Falls back to the originals on error."""
+        model = self._model_name()
+        try:
+            compacted, stats = compact_examples(
+                examples,
+                self.compaction,
+                render=_render_examples,
+                count_tokens=lambda text: _count_tokens(text, model),
+            )
+        except Exception:
+            logger.warning(
+                "Compaction failed for component %r; using the full examples.", name, exc_info=True
+            )
+            return examples
+        tokens = f", {stats.tokens:,} tokens" if stats.tokens is not None else ""
+        logger.info(
+            "Compacted examples for component %r: %s to %s characters%s, %d of %d examples.",
+            name, f"{stats.chars_before:,}", f"{stats.chars_after:,}", tokens,
+            stats.examples_kept, len(examples),
+        )
+        if stats.examples_dropped:
+            logger.warning(
+                "The examples token budget dropped the last %d example(s) for component %r.",
+                stats.examples_dropped, name,
+            )
+        if stats.over_budget:
+            logger.warning(
+                "One example for component %r is over the examples token budget; sending it anyway.",
+                name,
+            )
+        return compacted
 
     # -- Internals ----------------------------------------------------------
 

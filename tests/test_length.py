@@ -46,7 +46,11 @@ def test_truncation_when_compression_still_over_budget():
 
 
 def test_length_limit_text():
-    assert SkilledProposer()._length_limit_text() == "None"
+    assert (
+        SkilledProposer()._length_limit_text()
+        == "The new instruction must be at most 1000 words."
+    )
+    assert SkilledProposer(max_words=None)._length_limit_text() == "None"
     assert (
         SkilledProposer(max_words=10)._length_limit_text()
         == "The new instruction must be at most 10 words."
