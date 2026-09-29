@@ -20,6 +20,7 @@ except ImportError:  # dspy < 3.x fallback: nothing raises it
     class LMError(Exception):
         pass
 
+from skilled_proposer.compaction import Compaction, compact_examples
 from skilled_proposer.journal import Journal, JournalEntry
 from skilled_proposer.signatures import InstructionProposalModule, rlm_signature
 from skilled_proposer.skill import Skill, render_skills
@@ -168,6 +169,16 @@ class SkilledProposer:
             sandbox (the `rlm` extra). Pass dspy's own `PythonInterpreter`
             for the Deno/Pyodide sandbox instead (the `rlm-deno` extra).
         seed: Seeds the order of seen records.
+        compaction: Experimental. Shorten long agent trajectories and other
+            long fields in the reflective examples before they render into
+            the prompt. True uses Compaction() defaults. A Compaction sets
+            observation_chars, max_field_chars, and examples_token_budget.
+            Histories from dspy.ReAct, dspy.ReActV2, and dspy.RLM render as
+            numbered steps with thoughts, tool calls, and code in full. Each
+            tool result keeps its head. RLM outputs keep the head and tail
+            the student saw. Feedback is never cut. Applies only to the
+            Predict engine; the RLM engine sends its examples unchanged, so
+            the model can explore the full records itself in the sandbox.
     """
 
     def __init__(
@@ -195,6 +206,7 @@ class SkilledProposer:
         max_llm_calls: int = 50,
         interpreter_factory=None,
         seed: int = 0,
+        compaction: bool | Compaction = False,
     ):
         if max_tokens is not None and max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
@@ -220,6 +232,13 @@ class SkilledProposer:
             raise ValueError('seen_path requires review="seen"')
         if rlm_threshold <= 0 or max_iters <= 0 or max_llm_calls <= 0:
             raise ValueError("rlm_threshold, max_iters, and max_llm_calls must be positive")
+        if not isinstance(compaction, (bool, Compaction)):
+            raise TypeError("compaction must be a bool or a Compaction")
+        if engine == "rlm" and compaction:
+            raise ValueError(
+                'compaction is not available for engine="rlm"; it only applies to the Predict '
+                "engine. The RLM analyzes examples itself in the sandbox and needs them uncut."
+            )
 
         self.skills = [Skill.load(s) for s in (skills or [])]
         self.additional_instructions = (additional_instructions or "").strip()
@@ -230,6 +249,7 @@ class SkilledProposer:
         self.max_examples = max_examples
         self.retries = retries
         self.on_error = "skip" if on_error == "keep" else on_error
+        self.compaction = Compaction() if compaction is True else (compaction or None)
 
         self.journal_enabled = journal
         self.journal_path = Path(journal_path) if journal_path is not None else None
@@ -317,6 +337,8 @@ class SkilledProposer:
                     seen_batches.append((name, current, records))
                 propose = lambda: self._propose_rlm(name, current, records)  # noqa: E731
             else:
+                if self.compaction is not None:
+                    examples = self._compact(name, examples)
                 propose = lambda: self._propose_one(name, current, examples)  # noqa: E731
             proposal = _attempt(
                 propose,
@@ -399,6 +421,41 @@ class SkilledProposer:
         except Exception:
             logger.warning("Lesson distillation failed; keeping the prior lessons.", exc_info=True)
         self.journal.closed_since_distill = 0
+
+    # -- Compaction (Predict engine only) ------------------------------------
+
+    def _compact(self, name: str, examples: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+        """Compact one component's examples. Falls back to the originals on error."""
+        model = self._model_name()
+        try:
+            compacted, stats = compact_examples(
+                examples,
+                self.compaction,
+                render=_render_examples,
+                count_tokens=lambda text: _count_tokens(text, model),
+            )
+        except Exception:
+            logger.warning(
+                "Compaction failed for component %r; using the full examples.", name, exc_info=True
+            )
+            return examples
+        tokens = f", {stats.tokens:,} tokens" if stats.tokens is not None else ""
+        logger.info(
+            "Compacted examples for component %r: %s to %s characters%s, %d of %d examples.",
+            name, f"{stats.chars_before:,}", f"{stats.chars_after:,}", tokens,
+            stats.examples_kept, len(examples),
+        )
+        if stats.examples_dropped:
+            logger.warning(
+                "The examples token budget dropped the last %d example(s) for component %r.",
+                stats.examples_dropped, name,
+            )
+        if stats.over_budget:
+            logger.warning(
+                "One example for component %r is over the examples token budget; sending it anyway.",
+                name,
+            )
+        return compacted
 
     # -- Internals ----------------------------------------------------------
 

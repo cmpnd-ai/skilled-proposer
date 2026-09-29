@@ -18,6 +18,18 @@ def test_engine_args_validation(tmp_path):
     for bad in ({"rlm_threshold": 0}, {"max_iters": 0}, {"max_llm_calls": 0}):
         with pytest.raises(ValueError):
             SkilledProposer(engine="rlm", interpreter_factory=ExecInterpreter, **bad)
+    with pytest.raises(ValueError, match="compaction"):
+        SkilledProposer(engine="rlm", interpreter_factory=ExecInterpreter, compaction=True)
+
+
+def test_compaction_is_predict_only():
+    # engine="predict" (the default) accepts compaction.
+    predict_proposer = SkilledProposer(compaction=True)
+    assert predict_proposer.compaction is not None
+
+    # engine="rlm" rejects it outright rather than silently ignoring it.
+    with pytest.raises(ValueError, match="compaction"):
+        SkilledProposer(engine="rlm", interpreter_factory=ExecInterpreter, compaction=True)
 
 
 def test_rlm_engine_needs_monty(monkeypatch):
