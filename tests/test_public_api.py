@@ -10,7 +10,6 @@ def test_public_exports():
         "SkilledProposer",
         "SkilledCodeProposer",
         "Skill",
-        "Compaction",
         "Journal",
         "JournalEntry",
         "InstructionProposalModule",

@@ -1,7 +1,6 @@
 """skilled-proposer: GEPA instruction and Flex code proposers for DSPy."""
 
 from skilled_proposer.code_proposer import SkilledCodeProposer
-from skilled_proposer.compaction import Compaction
 from skilled_proposer.journal import Journal, JournalEntry
 from skilled_proposer.patch import (
     install_code_proposer,
@@ -29,7 +28,6 @@ __all__ = [
     "SkilledProposer",
     "SkilledCodeProposer",
     "Skill",
-    "Compaction",
     "Journal",
     "JournalEntry",
     "InstructionProposalModule",
