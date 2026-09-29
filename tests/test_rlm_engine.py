@@ -20,8 +20,8 @@ def test_engine_args_validation(tmp_path):
             SkilledProposer(engine="rlm", interpreter_factory=ExecInterpreter, **bad)
 
 
-def test_rlm_engine_needs_deno(monkeypatch):
-    monkeypatch.setattr(proposer_module, "_deno_error", lambda: "no deno here")
+def test_rlm_engine_needs_monty(monkeypatch):
+    monkeypatch.setattr(proposer_module, "_monty_error", lambda: "no monty here")
     with pytest.raises(RuntimeError, match=r"skilled-proposer\[rlm\]"):
         SkilledProposer(engine="rlm")
     with pytest.raises(RuntimeError):
@@ -71,8 +71,8 @@ def test_engine_choice_is_locked_after_first_resolution():
     assert proposer._resolve_engine("Do it.", []) == "rlm"
 
 
-def test_auto_resolving_to_rlm_without_deno_raises(monkeypatch):
-    monkeypatch.setattr(proposer_module, "_deno_error", lambda: "no deno here")
+def test_auto_resolving_to_rlm_without_monty_raises(monkeypatch):
+    monkeypatch.setattr(proposer_module, "_monty_error", lambda: "no monty here")
     proposer = SkilledProposer(engine="auto", rlm_threshold=50)
     with pytest.raises(RuntimeError, match=r"skilled-proposer\[rlm\]"):
         proposer._resolve_engine("Do it.", [{"Inputs": "word " * 400}])
@@ -247,13 +247,13 @@ def test_resumed_run_continues_iterations_from_saved_state(tmp_path):
     assert ids == ["1:p", "2:p", "3:p"]
 
 
-def test_auto_without_deno_warns_at_construction(monkeypatch, caplog):
-    monkeypatch.setattr(proposer_module, "_deno_error", lambda: "no deno here")
+def test_auto_without_monty_warns_at_construction(monkeypatch, caplog):
+    monkeypatch.setattr(proposer_module, "_monty_error", lambda: "no monty here")
     SkilledProposer(engine="auto")
-    assert "Deno" in caplog.text and "skilled-proposer[rlm]" in caplog.text
+    assert "dspy-monty-interpreter" in caplog.text and "skilled-proposer[rlm]" in caplog.text
 
 
 def test_auto_with_an_interpreter_factory_does_not_warn(monkeypatch, caplog):
-    monkeypatch.setattr(proposer_module, "_deno_error", lambda: "no deno here")
+    monkeypatch.setattr(proposer_module, "_monty_error", lambda: "no monty here")
     SkilledProposer(engine="auto", interpreter_factory=ExecInterpreter)
-    assert "Deno" not in caplog.text
+    assert "dspy-monty-interpreter" not in caplog.text

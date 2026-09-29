@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Drew Breunig", email = "dbreunig@gmail.com" }]
-dependencies = ["dspy>=3.3.1"]
+dependencies = ["dspy>=3.4.0"]
 keywords = ["dspy", "gepa", "prompt-optimization", "llm"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -24,7 +24,8 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-rlm = ["dspy[deno]>=3.3.1"]
+rlm = ["dspy-monty-interpreter>=0.5.0"]
+rlm-deno = ["dspy[deno]>=3.4.0"]
 
 [project.urls]
 Homepage = "https://github.com/cmpnd-ai/skilled-proposer"

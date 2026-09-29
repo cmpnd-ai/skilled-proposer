@@ -1,11 +1,25 @@
-"""Runs the RLM engine in dspy's real Deno/Pyodide sandbox. Skips without Deno."""
+"""Runs the RLM engine in dspy's real Deno/Pyodide sandbox (the rlm-deno extra,
+opted into explicitly since Monty is the default). Skips without Deno."""
 
 import pytest
+from dspy.primitives.code_interpreter import CodeInterpreterError
+from dspy.primitives.python_interpreter import PythonInterpreter
 
 from skilled_proposer import SkilledProposer
-from skilled_proposer.proposer import _deno_error
 
 from rlm_support import scripted
+
+
+def _deno_error() -> str | None:
+    """Why dspy's Deno sandbox cannot start here, or None when it can."""
+    from dspy.primitives.python_interpreter import _find_deno_executable, _validate_deno_version
+
+    try:
+        _validate_deno_version(_find_deno_executable())
+    except CodeInterpreterError as e:
+        return str(e)
+    return None
+
 
 pytestmark = [
     pytest.mark.deno,
@@ -19,7 +33,9 @@ def test_records_and_seen_arrive_in_the_real_sandbox():
         "SUBMIT(new_instruction=r['Feedback'] + ' ' + r['tags']['component'] + ' ' "
         "+ str(len(seen['instructions'])), change_summary='x')"
     )
-    proposer = SkilledProposer(engine="rlm", review="seen", prompt_model=scripted(code))
+    proposer = SkilledProposer(
+        engine="rlm", review="seen", prompt_model=scripted(code), interpreter_factory=PythonInterpreter
+    )
     out = proposer(
         candidate={"p": "Do it."},
         reflective_dataset={"p": [{"Inputs": {"q": "x"}, "Feedback": "wrong"}]},

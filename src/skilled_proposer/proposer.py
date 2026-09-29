@@ -20,9 +20,6 @@ except ImportError:  # dspy < 3.x fallback: nothing raises it
     class LMError(Exception):
         pass
 
-from dspy.primitives.code_interpreter import CodeInterpreterError
-from dspy.primitives.python_interpreter import PythonInterpreter
-
 from skilled_proposer.journal import Journal, JournalEntry
 from skilled_proposer.signatures import InstructionProposalModule, rlm_signature
 from skilled_proposer.skill import Skill, render_skills
@@ -76,24 +73,28 @@ def _attempt(propose, *, name: str, retries: int, on_error: str, label: str):
     return None
 
 
-def _deno_error() -> str | None:
-    """Why dspy's default sandbox cannot start here, or None when it can."""
-    from dspy.primitives.python_interpreter import _find_deno_executable, _validate_deno_version
-
+def _monty_error() -> str | None:
+    """Why the default RLM sandbox (Monty) is unavailable here, or None when it's fine."""
     try:
-        _validate_deno_version(_find_deno_executable())
-    except CodeInterpreterError as e:
+        import dspy_monty_interpreter  # noqa: F401
+    except ImportError as e:
         return str(e)
     return None
 
 
-def _require_deno() -> None:
-    error = _deno_error()
+def _require_monty() -> None:
+    error = _monty_error()
     if error is not None:
         raise RuntimeError(
-            'The RLM engine needs Deno. Install it with `pip install "skilled-proposer[rlm]"`, '
-            f"or pass interpreter_factory. ({error})"
+            'The RLM engine needs dspy-monty-interpreter. Install it with '
+            f'`pip install "skilled-proposer[rlm]"`, or pass interpreter_factory. ({error})'
         )
+
+
+def _default_interpreter_factory():
+    from dspy_monty_interpreter import MontyInterpreter
+
+    return MontyInterpreter
 
 
 class SkilledProposer:
@@ -163,7 +164,9 @@ class SkilledProposer:
         max_iters: RLM REPL iterations per proposal.
         max_llm_calls: Cap on the RLM's sub-LM calls per proposal.
         interpreter_factory: Zero-argument callable returning a dspy
-            CodeInterpreter. None uses dspy's Deno sandbox.
+            CodeInterpreter. None uses `dspy-monty-interpreter`'s Rust
+            sandbox (the `rlm` extra). Pass dspy's own `PythonInterpreter`
+            for the Deno/Pyodide sandbox instead (the `rlm-deno` extra).
         seed: Seeds the order of seen records.
     """
 
@@ -264,15 +267,15 @@ class SkilledProposer:
         if engine == "auto" and review == "seen":
             self._engine = "rlm"
         if self._engine == "rlm" and interpreter_factory is None:
-            _require_deno()
+            _require_monty()
         if self._engine is None and interpreter_factory is None:
             # GEPA catches proposer errors, so an "auto" run that picks RLM
-            # without Deno would fail every call without stopping. Say so now.
-            error = _deno_error()
+            # without Monty would fail every call without stopping. Say so now.
+            error = _monty_error()
             if error is not None:
                 logger.warning(
-                    'engine="auto" may choose RLM on the first call, but Deno is not available, '
-                    "so every proposal would fail. Install it with "
+                    'engine="auto" may choose RLM on the first call, but dspy-monty-interpreter '
+                    "is not available, so every proposal would fail. Install it with "
                     '`pip install "skilled-proposer[rlm]"` or use engine="predict". (%s)',
                     error,
                 )
@@ -282,7 +285,7 @@ class SkilledProposer:
                 max_iters=max_iters,
                 max_llm_calls=max_llm_calls,
                 sub_lm=sub_lm,
-                interpreter_factory=interpreter_factory or PythonInterpreter,
+                interpreter_factory=interpreter_factory or _default_interpreter_factory(),
             )
 
     # -- ProposalFn ---------------------------------------------------------
@@ -427,7 +430,7 @@ class SkilledProposer:
         size = _count_tokens(prompt, self._model_name())
         engine = "rlm" if size >= self.rlm_threshold else "predict"
         if engine == "rlm" and self.interpreter_factory is None:
-            _require_deno()
+            _require_monty()
         logger.info("SkilledProposer engine: %s (first prompt %d tokens).", engine, size)
         self._engine = engine
         return engine

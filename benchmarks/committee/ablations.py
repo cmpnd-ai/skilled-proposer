@@ -49,6 +49,7 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     "baseline-short": lambda: Ablation("baseline-short", {"max_words": 150}),
     "journal-long": lambda: Ablation("journal-long", {"journal": True, "additional_instructions": LONG_GUIDANCE}),
     "rlm": lambda: Ablation("rlm", {"engine": "rlm", "journal": True}),
+    "rlm-plain": lambda: Ablation("rlm-plain", {"engine": "rlm"}),
     "rlm-seen": lambda: Ablation(
         "rlm-seen", {"engine": "rlm", "review": "seen", "journal": True},
         reflection_minibatch_size=40,

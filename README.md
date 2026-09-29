@@ -96,7 +96,7 @@ SkilledProposer(
     sub_lm=None,                   # LM for the RLM's llm_query calls
     max_iters=20,                  # RLM REPL iterations per proposal
     max_llm_calls=50,              # RLM sub-LM calls per proposal
-    interpreter_factory=None,      # custom sandbox; None uses Deno
+    interpreter_factory=None,      # custom sandbox; None uses Monty
     seed=0,                        # order of seen records
 )
 ```
@@ -160,7 +160,7 @@ optimizer = dspy.GEPA(
 With `engine="rlm"`, each proposal runs as a [`dspy.RLM`](https://dspy.ai/api/modules/RLM/). The reflection model gets the reflective records as data in a Python sandbox and analyzes them with code and sub-LM calls before it writes. It counts failures across the batch, labels their root causes, and reads the records that the counts point to. Long inputs and agent histories no longer have to fit in one prompt.
 
 ```bash
-pip install "skilled-proposer[rlm]"   # adds Deno for dspy's sandbox
+pip install "skilled-proposer[rlm]"   # adds dspy-monty-interpreter's sandbox
 ```
 
 ```python
@@ -188,6 +188,7 @@ optimizer = dspy.GEPA(
 - **Skills.** Directory skills expose their other files, such as `models/openai.md`, to the model as `skill_files`, so it can open them when a diagnosis calls for them.
 - **Failures.** An RLM run that errors, runs out of `max_iters` or returns an empty instruction counts as a failure. `retries` runs the RLM again and then `on_error` applies. There is no fallback to the Predict engine.
 - **No extra rollouts.** The RLM analyzes records GEPA already produced. It never runs the student, so metric budgets are unchanged.
+- **Sandbox.** The default sandbox is [`dspy-monty-interpreter`](https://github.com/dbreunig/dspy-monty-interpreter)'s Rust-based interpreter (the `rlm` extra). Pass `interpreter_factory=dspy.primitives.python_interpreter.PythonInterpreter` to use dspy's own Deno/Pyodide sandbox instead (the `rlm-deno` extra).
 
 ## Using the standalone gepa package
 
