@@ -79,7 +79,7 @@ SkilledProposer(
     skills=None,                   # skills, paths, or inline strings
     additional_instructions=None,  # guidance applied to every proposal
     base_instructions=None,        # replace the built-in meta-prompt
-    max_words=None,                # word cap on proposed instructions
+    max_words=1000,                # word cap on proposed instructions
     max_tokens=None,               # token cap on proposed instructions
     prompt_model=None,             # (standalone GEPA only)
     max_examples=None,             # cap reflective examples per component

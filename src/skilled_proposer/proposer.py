@@ -86,7 +86,8 @@ class SkilledProposer:
         max_tokens: Optional cap on the proposed instruction length in tokens
             (counted with litellm's tokenizer when available, else ~4 chars
             per token).
-        max_words: Optional cap on the proposed instruction length in words.
+        max_words: Cap on the proposed instruction length in words. Defaults
+            to 1000; pass None to remove the cap.
         prompt_model: Optional dspy.LM to run proposals with. Not needed under
             `dspy.GEPA`, which already wraps calls in the reflection LM's
             context; useful with the standalone `gepa` package.
@@ -131,7 +132,7 @@ class SkilledProposer:
         additional_instructions: str | None = None,
         base_instructions: str | None = None,
         max_tokens: int | None = None,
-        max_words: int | None = None,
+        max_words: int | None = 1000,
         prompt_model: "dspy.LM | None" = None,
         max_examples: int | None = None,
         retries: int = 1,
