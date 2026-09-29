@@ -77,7 +77,7 @@ from skilled_proposer import SkilledProposer
 def test_ablation_registry_names():
     assert list(ABLATIONS) == [
         "stock", "baseline", "journal", "baseline-long", "baseline-short", "journal-long",
-        "rlm", "rlm-plain", "rlm-seen",
+        "rlm", "rlm-plain", "rlm-seen", "bare", "bare-rlm",
     ]
     long = ABLATIONS["baseline-long"]()
     short = ABLATIONS["baseline-short"]()

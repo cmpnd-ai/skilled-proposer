@@ -17,6 +17,10 @@ class Ablation:
     proposer_kwargs: dict[str, Any] | None
     engine_kwargs: dict[str, Any] = field(default_factory=dict)
     reflection_minibatch_size: int | None = None
+    # None = the shared prompt-engineering skill (this ablation's point is
+    # skill-informed proposing). Pass [] for an ablation that isn't testing
+    # skills at all, e.g. a bare engine comparison.
+    skills: list[str] | None = None
 
     @property
     def uses_stock_proposer(self) -> bool:
@@ -30,7 +34,8 @@ class Ablation:
             kwargs["journal_path"] = run_dir / "journal.json"
         if kwargs.get("review") == "seen":
             kwargs["seen_path"] = run_dir / "seen.json"
-        return SkilledProposer(skills=SKILLS, **kwargs)
+        skills = SKILLS if self.skills is None else self.skills
+        return SkilledProposer(skills=skills, **kwargs)
 
     def gepa_kwargs(self, extra_callbacks: list[Any]) -> dict[str, Any]:
         return {"callbacks": list(extra_callbacks), **self.engine_kwargs}
@@ -54,6 +59,10 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
         "rlm-seen", {"engine": "rlm", "review": "seen", "journal": True},
         reflection_minibatch_size=40,
     ),
+    # No skill: these test the engine itself (predict vs. rlm), not
+    # skill-informed proposing, so nothing but the engine should differ.
+    "bare": lambda: Ablation("bare", {}, skills=[]),
+    "bare-rlm": lambda: Ablation("bare-rlm", {"engine": "rlm"}, skills=[]),
 }
 
 
