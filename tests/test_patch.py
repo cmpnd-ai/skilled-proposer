@@ -1,10 +1,11 @@
+"""The deprecated patch still works until it is removed, and warns."""
+
 import pytest
-
-pytest.importorskip("dspy.predict.flex")
-
 from dspy.teleprompt.gepa import gepa_utils
 
 from skilled_proposer import patch
+
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
 @pytest.fixture(autouse=True)
@@ -107,3 +108,19 @@ def test_drift_check_raises_on_unexpected_signature(monkeypatch):
     monkeypatch.setattr(gepa_utils, "propose_code", wrong_shape)
     with pytest.raises(RuntimeError, match="cannot patch"):
         patch.install_code_proposer(_stub_proposer([]))
+
+
+@pytest.mark.filterwarnings("default::DeprecationWarning")
+def test_install_warns_deprecated():
+    with pytest.warns(DeprecationWarning, match=r"dspy\.GEPA\(code_proposer=") as record:
+        patch.install_code_proposer(_stub_proposer([]))
+    assert record[0].filename == __file__
+
+
+@pytest.mark.filterwarnings("default::DeprecationWarning")
+def test_use_code_proposer_warns_deprecated_at_the_with_statement():
+    with pytest.warns(DeprecationWarning, match="use_code_proposer is deprecated") as record:
+        with patch.use_code_proposer(_stub_proposer([])):
+            pass
+    assert len(record) == 1
+    assert record[0].filename == __file__
