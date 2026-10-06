@@ -1,15 +1,17 @@
-"""Wire a CodeProposalFn into dspy.GEPA until the upstream hook exists.
+"""Deprecated: wire a CodeProposalFn into dspy.GEPA by patching dspy.
 
-``dspy.GEPA`` routes ``dspy.Flex`` code components to the module-level
-function ``propose_code`` in ``dspy.teleprompt.gepa.gepa_utils``; there
-is no ``code_proposer`` parameter yet. This module swaps that function
+dspy 3.4 added a ``code_proposer`` parameter to ``dspy.GEPA``, so pass
+the proposer there instead::
+
+    optimizer = dspy.GEPA(..., code_proposer=SkilledCodeProposer(...))
+
+This module swaps ``propose_code`` in ``dspy.teleprompt.gepa.gepa_utils``
 for a wrapper that calls a user-supplied proposer with the
-CodeProposalFn contract. Remove once dspy.GEPA accepts a
-``code_proposer`` directly.
+CodeProposalFn contract. It is kept for one release so existing callers
+keep working, and will be removed in the next.
 
-Note: dspy still logs a warning that a custom instruction_proposer
-"skips code components" — under this patch that warning is expected and
-harmless, since the patched proposer handles them.
+When ``code_proposer`` is also passed to ``dspy.GEPA``, GEPA calls it
+and never reaches the patched function.
 
 This patch is process-global state: it replaces a module-level function
 for as long as it is installed, affecting every GEPA compile running in
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import warnings
 
 _EXPECTED_PARAMS = [
     "code_keys",
@@ -35,31 +38,36 @@ _EXPECTED_PARAMS = [
 _original_propose_code = None
 
 
+_DEPRECATION = (
+    "{name} is deprecated and will be removed in the next release; pass "
+    "the proposer to dspy.GEPA(code_proposer=...) instead."
+)
+
+
 def _gepa_utils():
-    try:
-        from dspy.teleprompt.gepa import gepa_utils
-    except ImportError as e:
-        raise ImportError(
-            "Patching GEPA's code proposer requires dspy>=3.3 "
-            f"(no dspy.teleprompt.gepa.gepa_utils in the installed dspy: {e})."
-        ) from e
-    if not hasattr(gepa_utils, "propose_code"):
-        raise RuntimeError(
-            "The installed dspy has no gepa_utils.propose_code; this "
-            "feature requires dspy>=3.3 and this skilled-proposer version "
-            "cannot patch it."
-        )
+    from dspy.teleprompt.gepa import gepa_utils
+
     return gepa_utils
 
 
 def install_code_proposer(proposer) -> None:
-    """Replace dspy's built-in Flex code proposer with ``proposer``.
+    """Deprecated: pass ``proposer`` to ``dspy.GEPA(code_proposer=...)``.
 
-    ``proposer`` is any CodeProposalFn: ``(candidate, reflective_dataset,
+    Replaces dspy's built-in Flex code proposer with ``proposer``, any
+    CodeProposalFn: ``(candidate, reflective_dataset,
     components_to_update, task_descriptions, context_blurbs) ->
     dict[str, str]``. The wrapper runs it inside the reflection LM's
     context when GEPA supplies one.
     """
+    warnings.warn(
+        _DEPRECATION.format(name="install_code_proposer"),
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _install(proposer)
+
+
+def _install(proposer) -> None:
     global _original_propose_code
     if _original_propose_code is not None:
         raise RuntimeError("A code proposer is already installed.")
@@ -72,8 +80,8 @@ def install_code_proposer(proposer) -> None:
         raise RuntimeError(
             f"dspy {getattr(dspy, '__version__', '?')}'s propose_code has "
             f"parameters {params}, expected {_EXPECTED_PARAMS}; this "
-            "skilled-proposer version cannot patch it. (This feature "
-            "requires dspy>=3.3; a newer dspy may have changed internals.)"
+            "skilled-proposer version cannot patch it. Pass the proposer "
+            "to dspy.GEPA(code_proposer=...) instead."
         )
 
     def _patched(code_keys, candidate, reflective_dataset,
@@ -102,7 +110,11 @@ def install_code_proposer(proposer) -> None:
 
 
 def uninstall_code_proposer() -> None:
-    """Restore dspy's built-in code proposer. Safe to call when not installed."""
+    """Restore dspy's built-in code proposer. Safe to call when not installed.
+
+    Not deprecated on its own, so cleanup after a deprecated install
+    does not warn twice.
+    """
     global _original_propose_code
     if _original_propose_code is None:
         return
@@ -112,14 +124,16 @@ def uninstall_code_proposer() -> None:
 
 @contextlib.contextmanager
 def use_code_proposer(proposer):
-    """Context manager: install ``proposer`` for the duration of the block.
+    """Deprecated: pass ``proposer`` to ``dspy.GEPA(code_proposer=...)``.
 
-    Usage::
-
-        with use_code_proposer(SkilledCodeProposer(skills=[...])):
-            optimized = optimizer.compile(program, trainset=train, valset=val)
+    Context manager: install ``proposer`` for the duration of the block.
     """
-    install_code_proposer(proposer)
+    warnings.warn(
+        _DEPRECATION.format(name="use_code_proposer"),
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    _install(proposer)
     try:
         yield proposer
     finally:
