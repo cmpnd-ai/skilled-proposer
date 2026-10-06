@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Drew Breunig", email = "dbreunig@gmail.com" }]
-dependencies = ["dspy>=3.3.1"]
+dependencies = ["dspy>=3.4.0"]
 keywords = ["dspy", "gepa", "prompt-optimization", "llm"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -33,11 +33,13 @@ dev-dependencies = [
     "rapidfuzz>=3.0",
     "python-dotenv>=1.0",
     "cmpnd>=0.25.1",
+    "dspy[deno]>=3.4.0",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = ["deno: needs the Deno runtime for dspy's sandbox"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skilled_proposer"]
