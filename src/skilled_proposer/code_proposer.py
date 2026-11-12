@@ -1,11 +1,11 @@
 """SkilledCodeProposer: a code proposer for dspy.Flex components under GEPA.
 
-Implements the CodeProposalFn contract this package proposes for DSPy:
+Implements dspy's CodeProposalFn protocol
+(``dspy.teleprompt.gepa.gepa_utils.CodeProposalFn``):
 ``__call__(candidate, reflective_dataset, components_to_update,
-task_descriptions, context_blurbs) -> dict[str, str]``, called under the
-reflection LM's context (or with an explicit ``prompt_model``). Until
-``dspy.GEPA`` grows a ``code_proposer`` hook, wire it in with
-``skilled_proposer.patch.use_code_proposer``.
+task_descriptions, context_blurbs) -> dict[str, str]``. Pass it to
+``dspy.GEPA(code_proposer=...)``, which calls it under the reflection
+LM's context (or set an explicit ``prompt_model``).
 """
 
 from __future__ import annotations
@@ -54,14 +54,9 @@ def _validate_module_source(source: str) -> str | None:
 
 
 def _primitives_catalog() -> str:
-    """dspy's catalog of primitives allowed inside Flex source (lazy import)."""
-    try:
-        from dspy.predict.flex.primitives_doc import PRIMITIVES_CATALOG
-    except ImportError as e:
-        raise ImportError(
-            "SkilledCodeProposer needs dspy.Flex, which requires dspy>=3.3; "
-            f"the installed dspy has no dspy.predict.flex ({e})."
-        ) from e
+    """dspy's catalog of primitives allowed inside Flex source."""
+    from dspy.predict.flex.primitives_doc import PRIMITIVES_CATALOG
+
     return PRIMITIVES_CATALOG
 
 
@@ -69,10 +64,10 @@ class SkilledCodeProposer:
     """Proposes revised source for ``dspy.Flex`` components, optionally
     informed by skills and extra guidance.
 
-    Implements the CodeProposalFn contract (see module docstring). GEPA
-    calls it once per reflection round with the code components to
-    update; it returns a full replacement ``dspy.Module`` subclass
-    source per component.
+    Implements dspy's CodeProposalFn protocol; pass it to
+    ``dspy.GEPA(code_proposer=...)``. GEPA calls it once per reflection
+    round with the code components to update; it returns a full
+    replacement ``dspy.Module`` subclass source per component.
 
     Args:
         skills: Iterable of ``Skill`` objects, paths to SKILL.md files or
@@ -85,8 +80,8 @@ class SkilledCodeProposer:
             anti-overfitting contract too — include equivalent rules in
             your replacement if you still want them.
         prompt_model: Optional dspy.LM to run proposals with. Not needed
-            under the ``skilled_proposer.patch`` helper, which wraps
-            calls in the reflection LM's context.
+            under ``dspy.GEPA(code_proposer=...)``, which calls the
+            proposer in the reflection LM's context.
         max_examples: Cap on reflective examples rendered per component.
             None = no cap.
         retries: Extra attempts per component when a proposal fails or

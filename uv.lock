@@ -155,7 +155,7 @@ wheels = [
 
 [[package]]
 name = "cmpnd"
-version = "0.93.0"
+version = "0.96.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dspy" },
@@ -164,9 +164,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/36/3ed97a7d80be394e77816905de45d1c7036613d898d64977158185721ded/cmpnd-0.93.0.tar.gz", hash = "sha256:41bb8de18f5b829d6ebccc3c5904e5b88fea8400b1f3f39f04618c065ba920d4", size = 2032434, upload-time = "2026-11-12T01:01:57.16Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/b1/203156a5abb6c20332d943d38523b6017d517392eddcb8265820a12a4b80/cmpnd-0.96.0.tar.gz", hash = "sha256:981f7d2958a6dccb16c3092ae60f7d8c508a742ca3ecaf0c5002c37a88b40687", size = 2067644, upload-time = "2026-11-12T15:29:04.6Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/f4/76a64d0f8dd2c04d6da725c44afe7461b938106319f7d2788d705a88756e/cmpnd-0.93.0-py3-none-any.whl", hash = "sha256:a5b18593724b48808b8c05abac467e16e18b538b400fb50d77142b20b65e6af9", size = 540847, upload-time = "2026-11-12T01:01:55.297Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/af/00871f699a79a6f9c8cf8ee352948fb7a22daf884c6664bb841a5cf7e96b/cmpnd-0.96.0-py3-none-any.whl", hash = "sha256:967bc0ab0f17d32c6fbe7e91ee054e4b91b1e5e4daad8631632014237b6e15c7", size = 558384, upload-time = "2026-11-12T15:29:02.864Z" },
 ]
 
 [[package]]
@@ -1189,7 +1189,7 @@ wheels = [
 
 [[package]]
 name = "skilled-proposer"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "dspy" },
@@ -1206,6 +1206,7 @@ rlm-deno = [
 [package.dev-dependencies]
 dev = [
     { name = "cmpnd", marker = "python_full_version >= '3.11'" },
+    { name = "dspy", extra = ["deno"] },
     { name = "pytest" },
     { name = "python-dotenv" },
     { name = "rapidfuzz" },
@@ -1222,6 +1223,7 @@ provides-extras = ["rlm", "rlm-deno"]
 [package.metadata.requires-dev]
 dev = [
     { name = "cmpnd", marker = "python_full_version >= '3.11'", specifier = ">=0.93.0" },
+    { name = "dspy", extras = ["deno"], specifier = ">=3.4.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "rapidfuzz", specifier = ">=3.0" },

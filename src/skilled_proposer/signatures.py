@@ -340,8 +340,9 @@ class ProposeGeneralizableModuleSource(dspy.Signature):
     1. `def __init__(self):` calls `super().__init__()` and assigns the
        predictors the module needs. Pick the simplest primitive that fits
        each step: `dspy.Predict("...")` for a direct call (the common
-       default), `dspy.ReAct` when a step must call tools, and 
-       `dspy.RLM("...")` when a step requires reasoning over a large or 
+       default), the catalog's tool-calling module (`dspy.ReAct`, or
+       `dspy.ReActV2` before DSPy 3.5) when a step must call tools, and
+       `dspy.RLM("...")` when a step requires reasoning over a large or
        structured input. Assign no predictors at all if the task needs no
        LM call.
     2. `def forward(self, **inputs):` calls those predictors as
@@ -353,8 +354,8 @@ class ProposeGeneralizableModuleSource(dspy.Signature):
 
     Tools are optional. Tools listed in the available context are in
     scope by name — reference them by those exact names, never import or
-    redefine them, and only those tools may be wired into `dspy.RLM` /
-    `dspy.ReAct` via `tools=[...]`. If the available context says no
+    redefine them, and only those tools may be wired into `dspy.RLM` or
+    the tool-calling module via `tools=[...]`. If the available context says no
     tools were provided, do not reference any. You may also write plain
     helper functions inside `forward` for logic the tools do not cover;
     helpers live in this source and are optimized with it, but they
