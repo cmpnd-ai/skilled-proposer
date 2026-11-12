@@ -51,5 +51,9 @@ def build_student(model: str, api_base: str, api_key: str) -> dspy.LM:
     )
 
 
-def build_reflection(model: str = DEFAULT_REFLECTION_MODEL) -> dspy.LM:
-    return dspy.LM(model)
+def build_reflection(model: str = DEFAULT_REFLECTION_MODEL, api_base: str | None = None,
+                     api_key: str | None = None) -> dspy.LM:
+    if not api_base:
+        return dspy.LM(model)
+    # An OpenAI-compatible gateway serves Chat Completions, not the Responses API.
+    return dspy.LM(model, api_base=api_base, api_key=api_key, model_type="chat")

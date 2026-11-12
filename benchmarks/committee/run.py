@@ -45,6 +45,10 @@ def parse_args(argv=None):
     p.add_argument("--student-model", default=os.environ.get("STUDENT_MODEL", DEFAULT_STUDENT_MODEL))
     p.add_argument("--student-api-base", default=os.environ.get("STUDENT_API_BASE", DEFAULT_STUDENT_API_BASE))
     p.add_argument("--reflection-model", default=os.environ.get("REFLECTION_MODEL", DEFAULT_REFLECTION_MODEL))
+    p.add_argument("--reflection-api-base", default=os.environ.get("REFLECTION_API_BASE"),
+                   help="OpenAI-compatible endpoint for the reflection model, e.g. https://gw.lunaroute.com/v1.")
+    p.add_argument("--reflection-api-key-env", default="REFLECTION_API_KEY",
+                   help="Environment variable that holds the key for --reflection-api-base.")
     p.add_argument("--out", default="benchmarks/results")
     p.add_argument("--dry-run", action="store_true", help="Load data, check the metric, and exit.")
     return p.parse_args(argv)
@@ -143,13 +147,15 @@ def main(argv=None) -> None:
 
     dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)
     student = build_student(args.student_model, args.student_api_base, os.environ.get("STUDENT_API_KEY", ""))
-    reflection = build_reflection(args.reflection_model)
+    reflection = build_reflection(args.reflection_model, args.reflection_api_base,
+                                  os.environ.get(args.reflection_api_key_env))
     dspy.configure(lm=student, adapter=dspy.XMLAdapter())
     print(f"[lm] student={args.student_model} reflection={args.reflection_model}")
     tracing = configure_tracing()
 
     probe = reflection("Reply with the single word ready.")
-    if not probe or not probe[0].strip():
+    text = probe[0].get("text", "") if probe and isinstance(probe[0], dict) else (probe[0] if probe else "")
+    if not (text or "").strip():
         raise SystemExit("The reflection model returned nothing. Check the API key in .env.")
 
     try:
