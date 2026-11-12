@@ -23,7 +23,7 @@ from skilled_proposer.signatures import (
 from skilled_proposer.skill import Skill
 from skilled_proposer.store import SeenStore
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "SkilledProposer",
