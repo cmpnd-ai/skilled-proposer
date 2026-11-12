@@ -6,6 +6,8 @@ from dspy.teleprompt.gepa import gepa_utils
 
 from skilled_proposer import patch
 
+pytestmark = pytest.mark.filterwarnings("ignore:install_code_proposer:DeprecationWarning")
+
 
 @pytest.fixture(autouse=True)
 def clean_patch_state():
@@ -106,4 +108,9 @@ def test_drift_check_raises_on_unexpected_signature(monkeypatch):
 
     monkeypatch.setattr(gepa_utils, "propose_code", wrong_shape)
     with pytest.raises(RuntimeError, match="cannot patch"):
+        patch.install_code_proposer(_stub_proposer([]))
+
+
+def test_install_warns_that_it_is_deprecated():
+    with pytest.warns(DeprecationWarning, match="code_proposer"):
         patch.install_code_proposer(_stub_proposer([]))

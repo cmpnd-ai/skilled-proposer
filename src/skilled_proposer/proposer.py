@@ -114,8 +114,8 @@ class SkilledProposer:
             the anti-overfitting contract too — if you still want it,
             include equivalent rules in your replacement text.
         max_tokens: Optional cap on the proposed instruction length in tokens
-            (counted with litellm's tokenizer when available, else ~4 chars
-            per token).
+            (counted with litellm's tokenizer when litellm is installed, else
+            ~4 chars per token; DSPy 3.5 no longer installs litellm).
         max_words: Cap on the proposed instruction length in words. Defaults
             to 1000; pass None to remove the cap.
         prompt_model: Optional dspy.LM to run proposals with. Not needed under
@@ -173,7 +173,7 @@ class SkilledProposer:
             long fields in the reflective examples before they render into
             the prompt. True uses Compaction() defaults. A Compaction sets
             observation_chars, max_field_chars, and examples_token_budget.
-            Histories from dspy.ReAct, dspy.ReActV2, and dspy.RLM render as
+            Histories from dspy.ReAct and dspy.RLM render as
             numbered steps with thoughts, tool calls, and code in full. Each
             tool result keeps its head. RLM outputs keep the head and tail
             the student saw. Feedback is never cut. Applies only to the

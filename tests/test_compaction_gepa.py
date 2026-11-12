@@ -1,9 +1,12 @@
 """Runs dspy.GEPA on a dspy.ReAct agent with stub LMs. No network."""
 
 import dspy
+from dspy.adapters.types.tool import ToolCalls
 from dspy.utils.dummies import DummyLM
 
 from skilled_proposer import SkilledProposer
+
+from lm_support import RespondingLM
 
 PAGE = "<title>Report</title>" + "lorem ipsum " * 3999 + "lorem ipsum"
 
@@ -13,24 +16,24 @@ def fetch_page(url: str) -> str:
     return PAGE
 
 
-class AgentLM(DummyLM):
+class AgentLM(RespondingLM):
     """Fetches one page, then finishes. Answers correctly only when the
-    extract instruction contains GOOD."""
+    instruction that writes the answer contains GOOD."""
 
-    def __init__(self):
-        super().__init__([])
-
-    def forward(self, prompt=None, messages=None, **kwargs):
+    def respond(self, messages):
         system, user = messages[0]["content"], messages[-1]["content"]
+        answer = "gold" if "GOOD" in system else "bad"
+        # dspy.ReAct before DSPy 3.5: one predictor picks tools, another extracts the answer.
         if "next_tool_name" in system:
             if "observation_0" in user:
-                answer = {"next_thought": "Done.", "next_tool_name": "finish", "next_tool_args": {}}
-            else:
-                answer = {"next_thought": "Read it.", "next_tool_name": "fetch_page", "next_tool_args": {"url": "a.com"}}
-        else:
-            answer = {"reasoning": "r", "answer": "gold" if "GOOD" in system else "bad"}
-        self.answers = iter([answer])
-        return super().forward(prompt=prompt, messages=messages, **kwargs)
+                return {"next_thought": "Done.", "next_tool_name": "finish", "next_tool_args": {}}
+            return {"next_thought": "Read it.", "next_tool_name": "fetch_page", "next_tool_args": {"url": "a.com"}}
+        if "tool_calls" in system:
+            fetched = any(m["role"] == "tool" for m in messages)
+            call = {"name": "submit", "args": {"answer": answer}} if fetched else {
+                "name": "fetch_page", "args": {"url": "a.com"}}
+            return {"next_thought": "Next.", "tool_calls": ToolCalls.from_dict_list([call])}
+        return {"reasoning": "r", "answer": answer}
 
 
 def metric(gold, pred, trace=None, pred_name=None, pred_trace=None):

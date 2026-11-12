@@ -1,11 +1,9 @@
-"""Wire a CodeProposalFn into dspy.GEPA until the upstream hook exists.
+"""Deprecated: wire a CodeProposalFn into dspy.GEPA by patching gepa_utils.
 
-``dspy.GEPA`` routes ``dspy.Flex`` code components to the module-level
-function ``propose_code`` in ``dspy.teleprompt.gepa.gepa_utils``; there
-is no ``code_proposer`` parameter yet. This module swaps that function
-for a wrapper that calls a user-supplied proposer with the
-CodeProposalFn contract. Remove once dspy.GEPA accepts a
-``code_proposer`` directly.
+Pass the proposer to ``dspy.GEPA(code_proposer=...)`` instead. This module
+swaps the module-level function ``propose_code`` in
+``dspy.teleprompt.gepa.gepa_utils`` for a wrapper that calls a
+user-supplied proposer with the CodeProposalFn contract.
 
 Note: dspy still logs a warning that a custom instruction_proposer
 "skips code components" — under this patch that warning is expected and
@@ -22,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import warnings
 
 _EXPECTED_PARAMS = [
     "code_keys",
@@ -61,6 +60,12 @@ def install_code_proposer(proposer) -> None:
     context when GEPA supplies one.
     """
     global _original_propose_code
+    warnings.warn(
+        "install_code_proposer and use_code_proposer are deprecated. "
+        "Pass the proposer to dspy.GEPA(code_proposer=...) instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if _original_propose_code is not None:
         raise RuntimeError("A code proposer is already installed.")
 

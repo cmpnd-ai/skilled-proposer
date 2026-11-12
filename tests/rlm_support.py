@@ -3,6 +3,7 @@
 import contextlib
 import io
 
+import dspy
 from dspy.primitives.code_interpreter import CodeExecutionError, FinalOutput
 from dspy.utils.dummies import DummyLM
 
@@ -54,8 +55,12 @@ class ExecInterpreter:
         return buffer.getvalue()
 
 
+# From DSPy 3.5, RLM asks a model without native reasoning for a `plan` field.
+_PLAN = "plan" if tuple(int(x) for x in dspy.__version__.split(".")[:2]) >= (3, 5) else "reasoning"
+
+
 def step(code):
-    return {"reasoning": "Next step.", "code": f"```python\n{code}\n```"}
+    return {_PLAN: "Next step.", "code": f"```python\n{code}\n```"}
 
 
 def scripted(*codes):

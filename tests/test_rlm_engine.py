@@ -107,7 +107,7 @@ def call(proposer, candidate, dataset):
 
 
 def prompts(lm):
-    return [h["messages"][0]["content"] + h["messages"][-1]["content"] for h in lm.history]
+    return ["\n".join(m["content"] for m in h["messages"]) for h in lm.history]
 
 
 def test_rlm_proposal_explores_records_and_submits():

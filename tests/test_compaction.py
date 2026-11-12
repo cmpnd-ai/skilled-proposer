@@ -3,7 +3,7 @@
 import dspy
 import pytest
 from dspy.adapters.types.tool import ToolCallResults, ToolCalls
-from dspy.primitives.repl_types import REPLHistory
+from dspy.primitives.repl_types import REPLEntry, REPLHistory
 from dspy.utils.dummies import DummyLM
 
 from skilled_proposer.compaction import Compaction, compact_examples
@@ -81,10 +81,10 @@ def test_stats_without_budget():
     assert stats.chars_after < stats.chars_before
 
 
-# -- dspy.ReAct ---------------------------------------------------------------
+# -- dspy.ReAct before DSPy 3.5 ---------------------------------------------
 
 def react_trajectory(adapter, steps, start=0):
-    """Format a trajectory the way dspy.ReAct passes it to its predictors."""
+    """Format a trajectory the way dspy.ReAct before DSPy 3.5 passed it to its predictors."""
     trajectory = {}
     for i, (thought, name, args, observation) in enumerate(steps, start):
         trajectory[f"thought_{i}"] = thought
@@ -92,16 +92,14 @@ def react_trajectory(adapter, steps, start=0):
         trajectory[f"tool_args_{i}"] = args
         if observation is not None:
             trajectory[f"observation_{i}"] = observation
-    agent = dspy.ReAct("question -> answer", tools=[lambda url: "x"])
-    with dspy.context(adapter=adapter):
-        return agent._format_trajectory(trajectory)
+    signature = dspy.Signature(f"{', '.join(trajectory)} -> x")
+    return adapter.format_user_message_content(signature, trajectory)
 
 
 ADAPTERS = {
     "chat": dspy.ChatAdapter(),
     "json": dspy.JSONAdapter(),
     "xml": dspy.XMLAdapter(),
-    "two_step": dspy.TwoStepAdapter(extraction_model=DummyLM([])),
 }
 
 STEPS = [
@@ -180,7 +178,7 @@ def test_non_ascii_args_and_results_render_unescaped():
     assert "café ☕" in rendered
 
 
-# -- dspy.ReActV2 (dspy.History) ---------------------------------------------
+# -- dspy.History (dspy.ReAct and dspy.RLM from DSPy 3.5) -------------------
 
 def history_context(messages):
     """Format a dspy.History the way make_reflective_dataset writes Context."""
@@ -275,7 +273,18 @@ def test_history_message_with_a_raw_newline_stays_in_its_step():
     assert "Step 3\n  thought: c" in rendered
 
 
-# -- dspy.RLM -----------------------------------------------------------------
+def test_history_from_rlm_renders_code_and_cuts_outputs_to_head_and_tail():
+    entry = REPLEntry(reasoning="Read it.", code="print(doc)", output="START" + "A" * 3000 + "THE END")
+    messages = [{"question": "q", "iteration": "1/20", "repl_entry": entry}]
+    [out], _ = compact([{"Inputs": {"history": history_context(messages)}}], Compaction(observation_chars=100))
+    rendered = out["Inputs"]["history"]
+    assert rendered.startswith("Trajectory: 1 step, 2,912 characters cut")
+    assert "  thought: Read it.\n  code: print(doc)\n  output: START" in rendered
+    assert rendered.endswith("THE END")
+    assert "REPLEntry(" not in rendered
+
+
+# -- REPLHistory --------------------------------------------------------------
 
 def test_rlm_history_renders_what_the_student_saw():
     history = (
@@ -288,7 +297,6 @@ def test_rlm_history_renders_what_the_student_saw():
 
     assert rendered == history.format()
     assert "THE END" in rendered
-    assert "Output (3,007 chars)" in rendered
 
 
 def test_rlm_empty_history_renders_the_student_message():
@@ -380,7 +388,7 @@ def test_proposer_falls_back_when_compaction_fails(monkeypatch, caplog):
 def test_proposer_logs_dropped_examples(caplog):
     from skilled_proposer import SkilledProposer
 
-    proposer = SkilledProposer(compaction=Compaction(examples_token_budget=300))
+    proposer = SkilledProposer(compaction=Compaction(examples_token_budget=50))
     with caplog.at_level("INFO", logger="skilled_proposer.proposer"):
         propose(proposer, [page_example(i) for i in range(3)])
     assert "Compacted examples for component 'react'" in caplog.text

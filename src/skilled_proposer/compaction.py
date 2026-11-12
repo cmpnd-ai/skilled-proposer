@@ -1,8 +1,13 @@
 """Deterministic compaction of long agent trajectories in GEPA reflective examples.
 
 DSPy turns each predictor input into a string before the proposer sees it.
-The readers here recognize the strings that dspy.ReAct, dspy.ReActV2, and
-dspy.RLM produce, keep every decision in full, and shorten tool results.
+The readers here recognize the strings that agent modules produce, keep every
+decision in full, and shorten tool results:
+
+- dspy.ReAct before DSPy 3.5: numbered thought_N/tool_name_N/... fields.
+- dspy.History (dspy.ReAct from DSPy 3.5, dspy.ReActV2, and dspy.RLM from
+  DSPy 3.5): GEPA's "Context" block of one message per line.
+- REPLHistory (dspy.RLM before DSPy 3.5, and its extract step after).
 """
 
 from __future__ import annotations
@@ -146,6 +151,15 @@ def _head(text: str, limit: int) -> str:
     return f"{text[:limit]} [{len(text) - limit:,} of {len(text):,} characters cut]"
 
 
+def _head_tail(text: str, limit: int) -> str:
+    """Keep the start and end of ``text``, like RLM's own REPL output cap."""
+    if len(text) <= limit:
+        return text
+    head = limit // 2
+    tail = limit - head
+    return f"{text[:head]} [{len(text) - limit:,} of {len(text):,} characters cut] {text[-tail:]}"
+
+
 # --------------------------------------------------------------------------- #
 # Steps and rendering
 # --------------------------------------------------------------------------- #
@@ -164,6 +178,8 @@ class _Step:
     thought: str = ""
     calls: list[_Call] | None = None
     fields: dict[str, str] | None = None
+    code: str = ""
+    output: str | None = None
 
 
 def _render_steps(steps: list[_Step], obs: int, cap: int) -> str:
@@ -175,6 +191,11 @@ def _render_steps(steps: list[_Step], obs: int, cap: int) -> str:
             lines.append(_line(k, _head(v, cap)))
         if step.thought:
             lines.append(_line("thought", step.thought))
+        if step.code:
+            lines.append(_line("code", step.code))
+        if step.output is not None:
+            cut += max(0, len(step.output) - obs)
+            lines.append(_line("output", _head_tail(step.output, obs)))
         for call in step.calls or []:
             lines.append(_line("call", _format_call(call.name, call.args)))
             if call.result is not None:
@@ -285,7 +306,7 @@ def _parse_args(text: str) -> Any:
 
 
 # --------------------------------------------------------------------------- #
-# dspy.History (dspy.ReActV2): the Context block from make_reflective_dataset
+# dspy.History (dspy.ReAct and dspy.RLM): the Context block from make_reflective_dataset
 # --------------------------------------------------------------------------- #
 
 _HISTORY_PREFIX = "```json\n  0: "
@@ -323,6 +344,11 @@ def _history_step(number: int, line: str) -> _Step:
             step.thought = str(_literal(value_node))
         elif key == "tool_calls" and _call_name(value_node) == "ToolCalls":
             step.calls = _tool_calls(value_node)
+        elif key == "repl_entry" and _call_name(value_node) == "REPLEntry":
+            kw = {k: _literal(v) for k, v in _keywords(value_node).items()}
+            step.thought = str(kw.get("reasoning") or "")
+            step.code = str(kw.get("code") or "")
+            step.output = str(kw.get("output") or "")
         else:
             value = _literal(value_node)
             step.fields[str(key)] = value if isinstance(value, str) else repr(value)

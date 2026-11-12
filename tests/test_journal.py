@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 from dspy.utils.dummies import DummyLM
@@ -126,7 +127,7 @@ def test_journal_off_renders_none_in_prompt():
     proposer = SkilledProposer(prompt_model=lm)
     propose(proposer, "old", component="a")
     prompt = lm.history[-1]["messages"][-1]["content"]
-    assert "[[ ## proposal_journal ## ]]\nNone" in prompt
+    assert re.search(r"proposal_journal\W+None\b", prompt)
 
 
 def test_lineage_marks_parents_accepted():

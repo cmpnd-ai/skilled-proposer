@@ -8,34 +8,24 @@ from dspy.utils.dummies import DummyLM
 
 from skilled_proposer import SkilledProposer
 
+from lm_support import RespondingLM
 
-class StudentLM(DummyLM):
+
+class StudentLM(RespondingLM):
     """Answers correctly only when the instruction contains GOOD."""
 
-    def __init__(self):
-        super().__init__([])
-
-    def forward(self, prompt=None, messages=None, **kwargs):
-        system = messages[0]["content"] if messages else (prompt or "")
-        self.answers = iter([{"answer": "gold" if "GOOD" in system else "bad"}])
-        return super().forward(prompt=prompt, messages=messages, **kwargs)
+    def respond(self, messages):
+        return {"answer": "gold" if "GOOD" in messages[0]["content"] else "bad"}
 
 
-class HalfStudentLM(DummyLM):
+class HalfStudentLM(RespondingLM):
     """Answers correctly only for even-numbered questions, and only when the
     instruction contains GOOD, so no candidate is ever perfect."""
 
-    def __init__(self):
-        super().__init__([])
-
-    def forward(self, prompt=None, messages=None, **kwargs):
-        system = messages[0]["content"] if messages else (prompt or "")
-        user = messages[-1]["content"] if messages else (prompt or "")
-        match = re.search(r"\b[qv](\d+)\b", user)
+    def respond(self, messages):
+        match = re.search(r"\b[qv](\d+)\b", messages[-1]["content"])
         even = bool(match) and int(match.group(1)) % 2 == 0
-        answer = "gold" if ("GOOD" in system and even) else "bad"
-        self.answers = iter([{"answer": answer}])
-        return super().forward(prompt=prompt, messages=messages, **kwargs)
+        return {"answer": "gold" if ("GOOD" in messages[0]["content"] and even) else "bad"}
 
 
 class Program(dspy.Module):
@@ -135,7 +125,7 @@ def test_distillation_runs_on_the_reflection_model(data):
     run_gepa(proposer, reflection, data)
 
     assert proposer.journal.lessons
-    assert any("[[ ## prior_lessons ## ]]" in h["messages"][-1]["content"] for h in reflection.history)
+    assert any("prior_lessons" in h["messages"][-1]["content"] for h in reflection.history)
     student_history = dspy.settings.lm.history
     assert student_history
     assert not any("prior_lessons" in h["messages"][-1]["content"] for h in student_history)

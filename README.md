@@ -105,7 +105,7 @@ SkilledProposer(
 - `base_instructions` replaces the whole meta-prompt, including the anti-overfitting rules. If you still want those rules, include equivalent text in your replacement.
 - `retries` gives each component that many extra attempts when its proposal fails or comes back unusable. The default is one retry.
 - `on_error="skip"` logs a component whose proposal still fails after retries and leaves it out of the returned dict. GEPA then keeps the parent's text for that component, and when no component survives it skips the proposal without spending minibatch evaluations on a child identical to its parent. `"keep"` is accepted as an alias. Use `on_error="raise"` during development so the first failure surfaces with no retries. Either way, LM/provider errors (`LMError`) always propagate, so a dead API key fails the run instead of silently keeping unchanged text for the whole run.
-- `max_tokens` counts tokens with litellm's tokenizer when it can resolve your model name, and falls back to about 4 characters per token.
+- `max_tokens` and `engine="auto"` count tokens with litellm's tokenizer when litellm is installed and knows your model. Otherwise they estimate about 4 characters per token. DSPy 3.5 no longer installs litellm. Install it with `pip install litellm` for exact counts.
 
 ## Proposal journal
 
@@ -136,7 +136,7 @@ The journal is text only. It reads the instruction text GEPA hands back, so it w
 
 ## Agent programs
 
-Experimental, and Predict engine only. An agent built on `dspy.ReAct`, `dspy.ReActV2`, or `dspy.RLM` collects a long history on each run. DSPy puts that history into the reflective examples, so most of the proposal prompt can be the text of pages the agent fetched. Set `compaction=True` to shorten the examples before the proposer renders them.
+Experimental, and Predict engine only. An agent built on `dspy.ReAct` or `dspy.RLM` collects a long history on each run. DSPy puts that history into the reflective examples, so most of the proposal prompt can be the text of pages the agent fetched. Set `compaction=True` to shorten the examples before the proposer renders them.
 
 ```python
 from skilled_proposer import Compaction, SkilledProposer
@@ -153,7 +153,7 @@ With compaction on, the proposer renders each history as numbered steps.
 - Each tool result keeps its first `observation_chars` characters, 500 by default. A marker says how many characters were cut.
 - RLM outputs keep the head and tail view that the agent saw.
 - Any other string field longer than `max_field_chars`, 2,000 by default, keeps its head.
-- A long input that repeats across examples, e.g., the ReActV2 tool list, is written once.
+- A long input that repeats across examples, e.g., the ReAct tool list, is written once.
 - Feedback is never cut.
 
 `examples_token_budget` limits the tokens in the rendered examples for one proposal call. The skills, the journal, and the current instruction are outside the budget. When the examples are over the budget, the proposer halves the caps, then drops examples from the end until they fit. The proposer logs what it kept and dropped.
@@ -241,32 +241,28 @@ dspy 3.3 added [`dspy.Flex`](https://dspy.ai/diving-deeper/flex/), a module that
 
 `SkilledCodeProposer` applies this package's approach to Flex source. The reflection model gets the same three step procedure, a rule against overfitting written for code, your reference skills, and your extra guidance. Every proposal is checked before it is used. It must parse and define a class with a `forward` method, or the current source is kept.
 
-dspy has no `code_proposer` hook yet (coming soon!), so this package patches the built-in proposer for the duration of a `compile` call:
+Pass it to `dspy.GEPA` as `code_proposer`:
 
 ```python
 import dspy
-from skilled_proposer import SkilledCodeProposer, SkilledProposer, use_code_proposer
+from skilled_proposer import SkilledCodeProposer, SkilledProposer
 
 optimizer = dspy.GEPA(
     metric=metric,
-    reflection_lm=dspy.LM("openai/gpt-5.6-luna"),
+    reflection_lm=dspy.LM("openai/gpt-6-luna"),
     instruction_proposer=SkilledProposer(skills=["./skills/prompt-engineering"]),
+    code_proposer=SkilledCodeProposer(
+        skills=["./skills/prompt-engineering"],
+        additional_instructions="Prefer few predictors and plain Python.",
+    ),
     auto="medium",
 )
-
-code_proposer = SkilledCodeProposer(
-    skills=["./skills/prompt-engineering"],
-    additional_instructions="Prefer few predictors and plain Python.",
-)
-
-with use_code_proposer(code_proposer):
-    optimized = optimizer.compile(program, trainset=train, valset=val)
+optimized = optimizer.compile(program, trainset=train, valset=val)
 ```
 
 Notes:
 
-- dspy logs a warning that a custom `instruction_proposer` skips code components. Under the patch the warning is expected and harmless, because the patched proposer handles them.
-- The patch is a bridge. We are proposing a `code_proposer` parameter for `dspy.GEPA`; once it lands, pass `SkilledCodeProposer` there and drop the patch.
+- `use_code_proposer`, `install_code_proposer`, and `uninstall_code_proposer` are deprecated. They patch GEPA's built-in code proposer and predate the `code_proposer` parameter.
 - `SkilledCodeProposer` takes `skills`, `additional_instructions`, `base_instructions`, `prompt_model`, `max_examples`, `retries`, and `on_error`, with the same meanings as `SkilledProposer`. A proposal that does not parse, defines no class, or has no `forward` method counts as a failure. There is no length budget for code.
 
 ## Limits

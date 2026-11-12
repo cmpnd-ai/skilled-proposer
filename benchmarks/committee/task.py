@@ -45,7 +45,10 @@ class SchemaForcedLM(dspy.LM):
 
 
 def build_student(model: str, api_base: str, api_key: str) -> dspy.LM:
-    return SchemaForcedLM(f"openai/{model}", api_base=api_base, api_key=api_key or "lm-studio")
+    # DSPy 3.5 routes openai/ models to the Responses API by default; LM Studio serves Chat Completions.
+    return SchemaForcedLM(
+        f"openai/{model}", api_base=api_base, api_key=api_key or "lm-studio", model_type="chat"
+    )
 
 
 def build_reflection(model: str = DEFAULT_REFLECTION_MODEL) -> dspy.LM:
