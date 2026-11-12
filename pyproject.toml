@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-rlm = ["dspy-monty-interpreter>=0.5.0"]
+rlm = ["dspy-monty-interpreter>=0.7.0"]
 rlm-deno = ["dspy[deno]>=3.4.0"]
 
 [project.urls]

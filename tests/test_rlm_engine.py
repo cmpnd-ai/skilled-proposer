@@ -269,3 +269,11 @@ def test_auto_with_an_interpreter_factory_does_not_warn(monkeypatch, caplog):
     monkeypatch.setattr(proposer_module, "_monty_error", lambda: "no monty here")
     SkilledProposer(engine="auto", interpreter_factory=ExecInterpreter)
     assert "dspy-monty-interpreter" not in caplog.text
+
+
+def test_rlm_proposal_runs_on_monty():
+    monty = pytest.importorskip("dspy_monty_interpreter")
+    lm = scripted("SUBMIT(new_instruction=current_instruction + ' ' + str(len(examples['records'])), change_summary='x')")
+    proposer = SkilledProposer(engine="rlm", interpreter_factory=monty.MontyInterpreter, prompt_model=lm)
+    out = call(proposer, {"p": "Do it."}, {"p": [{"Inputs": {"q": "x"}, "Feedback": "wrong"}]})
+    assert out == {"p": "Do it. 1"}
