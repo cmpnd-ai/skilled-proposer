@@ -1,4 +1,5 @@
 import dspy
+import pytest
 
 from benchmarks.committee.data import DATA_PATH, load_rows, make_examples, split
 from benchmarks.committee.metric import SELFTEST_CASES, committee_metric
@@ -77,7 +78,7 @@ from skilled_proposer import SkilledProposer
 def test_ablation_registry_names():
     assert list(ABLATIONS) == [
         "stock", "baseline", "journal", "baseline-long", "baseline-short", "journal-long",
-        "rlm", "rlm-plain", "rlm-seen", "bare", "bare-rlm",
+        "rlm", "rlm-plain", "rlm-seen", "bare", "bare-rlm", "builtin",
     ]
     long = ABLATIONS["baseline-long"]()
     short = ABLATIONS["baseline-short"]()
@@ -184,3 +185,12 @@ def test_rlm_ablations(tmp_path, monkeypatch):
     assert proposer.review == "seen"
     assert proposer.seen_path == tmp_path / "seen.json"
     assert proposer.journal_path == tmp_path / "journal.json"
+
+
+def test_builtin_ablation_uses_dspys_proposer_with_the_skill(tmp_path):
+    proposal = pytest.importorskip("dspy.teleprompt.gepa.instruction_proposal")
+    if not hasattr(proposal, "InstructionProposer"):
+        pytest.skip("InstructionProposer needs DSPy 3.5")
+    proposer = ABLATIONS["builtin"]().build_proposer(tmp_path)
+    assert isinstance(proposer, proposal.InstructionProposer)
+    assert proposer.max_chars == 6000

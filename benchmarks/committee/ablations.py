@@ -21,20 +21,27 @@ class Ablation:
     # skill-informed proposing). Pass [] for an ablation that isn't testing
     # skills at all, e.g. a bare engine comparison.
     skills: list[str] | None = None
+    # Use DSPy's own InstructionProposer (DSPy 3.5+) with the same skills.
+    builtin: bool = False
 
     @property
     def uses_stock_proposer(self) -> bool:
         return self.proposer_kwargs is None
 
-    def build_proposer(self, run_dir: Path) -> SkilledProposer | None:
+    def build_proposer(self, run_dir: Path) -> Any:
         if self.proposer_kwargs is None:
             return None
+        skills = SKILLS if self.skills is None else self.skills
+        if self.builtin:
+            from dspy.teleprompt.gepa.instruction_proposal import InstructionProposer
+
+            # 6,000 characters is about SkilledProposer's default 1,000-word cap.
+            return InstructionProposer(skills=skills or None, max_chars=6000, **self.proposer_kwargs)
         kwargs = dict(self.proposer_kwargs)
         if kwargs.get("journal"):
             kwargs["journal_path"] = run_dir / "journal.json"
         if kwargs.get("review") == "seen":
             kwargs["seen_path"] = run_dir / "seen.json"
-        skills = SKILLS if self.skills is None else self.skills
         return SkilledProposer(skills=skills, **kwargs)
 
     def gepa_kwargs(self, extra_callbacks: list[Any]) -> dict[str, Any]:
@@ -63,6 +70,8 @@ ABLATIONS: dict[str, Callable[[], Ablation]] = {
     # skill-informed proposing, so nothing but the engine should differ.
     "bare": lambda: Ablation("bare", {}, skills=[]),
     "bare-rlm": lambda: Ablation("bare-rlm", {"engine": "rlm"}, skills=[]),
+    # DSPy's built-in proposer with the shared skill, the counterpart to baseline.
+    "builtin": lambda: Ablation("builtin", {}, builtin=True),
 }
 
 
